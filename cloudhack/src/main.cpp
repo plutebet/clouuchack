@@ -15,6 +15,7 @@
 #include "game/game.hpp"
 #include "game/camera.hpp"
 #include "func/visuals.hpp"
+#include "func/keys.hpp"
 #include "protect/oxorany.hpp"
 #include <cstdio>
 #include <cstring>
@@ -221,6 +222,7 @@ static int run_overlay(const options& opts) {
 
     if (!touch::init(max_size, min_size, (uint8_t)displayInfo.orientation))
         diag::log("WARN", "no touch device readable in /dev/input; menu cannot be operated");
+    keys::start();
 
     print_status(oxorany("Game detect ..."));
     if (!opts.no_launch && get_pid() <= 0) launch_standoff();
@@ -258,6 +260,7 @@ static int run_overlay(const options& opts) {
         crash::stage("process");
         bool run = game::valid();
         if (run && !proc::build_checked) game::verify_build();
+        keys::apply_toggle();
         const bool esp_allowed = run && proc::lib != 0 && proc::build_ok;
 
 #if defined(__x86_64__)

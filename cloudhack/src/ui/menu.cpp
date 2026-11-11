@@ -1,7 +1,7 @@
 // ================================================================================
 // cloudhack menu: a compact panel anchored under the watermark.
 //   Box / Name / Health / Weapon / Skeleton - toggle switches
-//   Trigger                                 - trigger on/off (lock time + tap)
+//   Trigger                                 - trigger on/off, or the bound toggle key
 //   Lock / Delay / Cooldown                 - trigger timings in ms (- / + steps)
 //   Color                                   - one ESP colour (box, health bar)
 //   fire point                              - press, then tap the fire button on screen
@@ -23,6 +23,7 @@
 #include "imgui_internal.h"
 #include "Android_draw/draw.h"
 #include "../other/status.hpp"
+#include "../func/keys.hpp"
 #include <cmath>
 #include <cfloat>
 #include <cstdio>
@@ -382,6 +383,13 @@ namespace ui::menu {
         else if (cfg::trigger::fire_set()) std::snprintf(fire_label, sizeof(fire_label), "fire %d,%d", cfg::trigger::fire_x, cfg::trigger::fire_y);
         else std::snprintf(fire_label, sizeof(fire_label), "bind fire point");
         if (big_button(dl, fire_label, c, cw, btn, a, k) && interactive) cfg::trigger::bind_mode = !cfg::trigger::bind_mode;
+        c.y += btn + 6.f * k;
+
+        char key_label[48];
+        if (keys::waiting()) std::snprintf(key_label, sizeof(key_label), "press a key");
+        else if (keys::bound() >= 0) std::snprintf(key_label, sizeof(key_label), "toggle key %d", keys::bound());
+        else std::snprintf(key_label, sizeof(key_label), "bind toggle key");
+        if (big_button(dl, key_label, c, cw, btn, a, k) && interactive) keys::set_wait(!keys::waiting());
         c.y += btn + 6.f * k;
 
         if (big_button(dl, "unload", c, cw, btn, a, k) && interactive) {
