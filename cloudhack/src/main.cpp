@@ -307,6 +307,7 @@ static int run_overlay(const options& opts) {
             if (alpha > 0.001f) {
                 crash::stage("menu");
                 ui::menu::render();
+                ui::menu::toggle_button(alpha);
             }
 
             if (esp_allowed) {

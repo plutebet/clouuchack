@@ -6,6 +6,7 @@
 //   Color                                   - one ESP colour (box, health bar)
 //   fire point                              - press, then tap the fire button on screen
 //   unload                                  - clean shutdown through status::g_quit_request
+//   toggle button                           - screen circle that flips the trigger (bind by tap)
 // Panel: tap a control = release without moving; press + move = drag the panel.
 // Everything is drawn directly on the foreground draw list; no ImGui windows,
 // so touch handling is a plain rectangle test on io.MousePos + IsMouseClicked.
@@ -51,9 +52,9 @@ namespace ui::menu {
         float g_resize_sx0 = 1.f, g_resize_sy0 = 1.f, g_resize_w0 = 1.f, g_resize_h0 = 1.f;
         ImVec2 g_grip_min, g_grip_max;         // resize grip of this frame; taps starting there are ignored
 
-        // Panel size in px. Base width 330 px, base height 62 px + 840 px per unit of scale_y.
+        // Panel size in px. Base width 330 px, base height 62 px + 910 px per unit of scale_y.
         float panel_w(float sx, float k) { return ImMin(330.f * k * sx, g_sw - 16.f * k); }
-        float panel_h(float sy, float k) { return 62.f * k + 840.f * k * sy; }
+        float panel_h(float sy, float k) { return 62.f * k + 910.f * k * sy; }
         // Keeps the whole panel inside the screen with an 8 px margin.
         ImVec2 clamp_panel(ImVec2 q, float w, float h, float k) {
             q.x = ImClamp(q.x, 8.f * k, ImMax(8.f * k, g_sw - 8.f * k - w));
@@ -68,6 +69,10 @@ namespace ui::menu {
         bool inside(const ImVec2& p, const ImVec2& mn, const ImVec2& mx) {
             return p.x >= mn.x && p.x <= mx.x && p.y >= mn.y && p.y <= mx.y;
         }
+        // Panel rect of the last open frame: the toggle button ignores taps that start on the panel.
+        bool g_panel_shown = false;
+        ImVec2 g_panel_lo, g_panel_hi;
+        bool panel_contains(const ImVec2& pt) { return g_panel_shown && inside(pt, g_panel_lo, g_panel_hi); }
         // A control fires on release: finger went down inside the rect and
         // came up inside it without travelling more than the drag threshold.
         // That is what lets the same finger drag the panel without flipping
@@ -258,7 +263,12 @@ namespace ui::menu {
         float dt = io.DeltaTime;
         if (dt <= 0.f || dt > 0.1f) dt = 0.016f;
         g_ma = lrp(g_ma, bar::g_open ? 1.f : 0.f, ImClamp(12.f * dt, 0.f, 1.f));
-        if (g_ma < 0.01f) { g_color_open = false; g_picker = 0; cfg::trigger::bind_mode = false; return; }
+        if (g_ma < 0.01f) {
+            g_color_open = false; g_picker = 0;
+            cfg::trigger::bind_mode = false; cfg::trigger::button_bind_mode = false;
+            g_panel_shown = false;
+            return;
+        }
 
         tick();
         const float k = style::k();
@@ -298,7 +308,7 @@ namespace ui::menu {
                 if (io.MouseDown[0]) {
                     const float dx = mp.x - g_resize_press.x, dy = mp.y - g_resize_press.y;
                     const float max_sx = ImMax(1.f, ImMin(2.5f, (g_sw - 16.f * k) / (330.f * k)));
-                    const float max_sy = ImMax(1.f, ImMin(2.5f, (g_sh - 16.f * k - 62.f * k) / (840.f * k)));
+                    const float max_sy = ImMax(1.f, ImMin(2.5f, (g_sh - 16.f * k - 62.f * k) / (910.f * k)));
                     cfg::menu::scale_x = ImClamp(g_resize_sx0 * (g_resize_w0 + dx) / g_resize_w0, 1.f, max_sx);
                     cfg::menu::scale_y = ImClamp(g_resize_sy0 * (g_resize_h0 + dy) / g_resize_h0, 1.f, max_sy);
                 } else {
@@ -337,6 +347,9 @@ namespace ui::menu {
             }
         }
         const ImVec2 pmax(p.x + w, p.y + ph);
+        g_panel_shown = true;
+        g_panel_lo = p;
+        g_panel_hi = pmax;
 
         ImDrawList* dl = ImGui::GetForegroundDrawList();
         const float r = 28.f * k;
@@ -392,6 +405,13 @@ namespace ui::menu {
         if (big_button(dl, key_label, c, cw, btn, a, k) && interactive) keys::set_wait(!keys::waiting());
         c.y += btn + 6.f * k;
 
+        char button_label[48];
+        if (cfg::trigger::button_bind_mode) std::snprintf(button_label, sizeof(button_label), "tap where the button goes");
+        else if (cfg::trigger::button_set) std::snprintf(button_label, sizeof(button_label), "button at %d,%d", int(cfg::trigger::button_x), int(cfg::trigger::button_y));
+        else std::snprintf(button_label, sizeof(button_label), "bind toggle button");
+        if (big_button(dl, button_label, c, cw, btn, a, k) && interactive) cfg::trigger::button_bind_mode = !cfg::trigger::button_bind_mode;
+        c.y += btn + 6.f * k;
+
         if (big_button(dl, "unload", c, cw, btn, a, k) && interactive) {
             status::g_quit_request = true;
         }
@@ -411,6 +431,19 @@ namespace ui::menu {
             }
         }
 
+        // Toggle button bind: the next short tap outside the panel places the button.
+        if (cfg::trigger::button_bind_mode && ImGui::IsMouseReleased(0)) {
+            const ImVec2 down = io.MouseClickedPos[0], up = io.MousePos;
+            const float thr = 10.f * k;
+            const float dx = up.x - down.x, dy = up.y - down.y;
+            if (!inside(down, p, pmax) && dx * dx + dy * dy <= thr * thr) {
+                cfg::trigger::button_x = up.x;
+                cfg::trigger::button_y = up.y;
+                cfg::trigger::button_set = true;
+                cfg::trigger::button_bind_mode = false;
+            }
+        }
+
         dl->AddRect(ImVec2(p.x + 0.75f * k, p.y + 0.75f * k), ImVec2(pmax.x - 0.75f * k, pmax.y - 0.75f * k),
                     col(clr::border_light, a), r, 0, 1.5f * k);
         for (int i = 1; i <= 3; ++i) {
@@ -419,5 +452,34 @@ namespace ui::menu {
         }
 
         if (!g_panel_pressed) g_panel_dragging = false;
+    }
+
+    // Screen toggle button: the bound circle, drawn whenever the overlay is on,
+    // menu open or closed. A tap that starts and ends on it flips the trigger.
+    void toggle_button(float alpha) {
+        if (!cfg::trigger::button_set || alpha < 0.01f) return;
+        const float k = style::k();
+        const float R = 44.f * k;
+        const ImVec2 c(cfg::trigger::button_x, cfg::trigger::button_y);
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+
+        // Target icon: dark disc, red rings, red centre. Dimmed while the trigger is off.
+        const float lit = cfg::trigger::enabled ? 1.f : 0.45f;
+        dl->AddCircleFilled(c, R, IM_COL32(0, 0, 0, int(150 * alpha)), 48);
+        const ImU32 red = IM_COL32(235, 30, 30, int(255 * alpha * lit));
+        dl->AddCircle(c, R * 0.66f, red, 48, R * 0.11f);
+        dl->AddCircle(c, R * 0.36f, red, 40, R * 0.10f);
+        dl->AddCircleFilled(c, R * 0.13f, red, 24);
+
+        // Tap: press inside the circle, release inside it, no drag. Ignored while binding.
+        if (cfg::trigger::button_bind_mode || !ImGui::IsMouseReleased(0)) return;
+        ImGuiIO& io = ImGui::GetIO();
+        const ImVec2 down = io.MouseClickedPos[0], up = io.MousePos;
+        const float thr = 10.f * k;
+        const float ex = down.x - c.x, ey = down.y - c.y;
+        const float dx = up.x - down.x, dy = up.y - down.y;
+        if (ex * ex + ey * ey > R * R || dx * dx + dy * dy > thr * thr) return;
+        if (panel_contains(down)) return;
+        cfg::trigger::enabled = !cfg::trigger::enabled;
     }
 }

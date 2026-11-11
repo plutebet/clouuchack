@@ -23,6 +23,9 @@ namespace trigger {
     inline int cooldown_ms = 150;         // minimum gap between two taps
     inline int fire_x = -1, fire_y = -1;  // fire button in screen px, set from the menu (bind row)
     inline bool bind_mode = false;        // menu: the next short tap on screen becomes the fire point
+    inline bool button_set = false;               // screen toggle button placed
+    inline float button_x = 0.f, button_y = 0.f;  // its centre, screen px
+    inline bool button_bind_mode = false;         // menu: the next short tap places the toggle button
     inline bool fire_set() { return fire_x >= 0 && fire_y >= 0; }
 }
 
