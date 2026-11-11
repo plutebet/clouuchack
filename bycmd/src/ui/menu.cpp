@@ -1,6 +1,6 @@
 // ================================================================================
 // cloudhack menu: a compact panel anchored under the watermark.
-//   Box / Name / Health / Weapon    - toggle switches
+//   Box / Name / Health / Weapon / Skeleton - toggle switches
 //   Color                           - one ESP colour (box, health bar)
 //   unload                          - clean shutdown through status::g_quit_request
 // Panel: tap a control = release without moving; press + move = drag the panel.
@@ -226,7 +226,7 @@ namespace ui::menu {
         const float row = 64.f * k * sy;
         const float crow = 72.f * k * sy;
         const float btn = 64.f * k * sy;
-        const float ph = pad + row * 4.f + crow + 10.f * k + btn + 6.f * k + 16.f * k;
+        const float ph = pad + row * 5.f + crow + 10.f * k + btn + 6.f * k + 16.f * k;
 
         ImVec2 p;
         if (g_menu_custom) {
@@ -319,6 +319,7 @@ namespace ui::menu {
             {"Name", &cfg::esp::name},
             {"Health", &cfg::esp::health},
             {"Weapon", &cfg::esp::weapon},
+            {"Skeleton", &cfg::esp::skeleton},
         };
         for (const item& it : items) {
             bool v = *it.value;

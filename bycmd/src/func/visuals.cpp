@@ -11,6 +11,7 @@
 #include "../game/player.hpp"
 #include "../game/camera.hpp"
 #include "../game/weapon.hpp"
+#include "../game/skeleton.hpp"
 #include "../ui/theme/theme.hpp"
 #include "../ui/cfg.hpp"
 #include "../other/crash.hpp"
@@ -101,7 +102,7 @@ namespace {
 
 void visuals::draw() {
     if (!(g_sw >= 2.f) || !(g_sh >= 2.f)) return;
-    bool any = cfg::esp::box || cfg::esp::name || cfg::esp::health || cfg::esp::weapon;
+    bool any = cfg::esp::box || cfg::esp::name || cfg::esp::health || cfg::esp::weapon || cfg::esp::skeleton;
     if (!any) { esp_wait("all ESP options disabled"); return; }
 
     crash::stage("esp-players");
@@ -122,6 +123,7 @@ void visuals::draw() {
         purge_missing(g_motion, live);
         purge_missing(player::g_transform_cache, live);
         purge_missing(weapon::g_players, live);
+        purge_missing(skeleton::g_players, live);
     }
 
     // Resolve at most one name per 100 ms. Name discovery touches several
@@ -170,6 +172,8 @@ void visuals::draw() {
         int hp{0};
         int max_hp{100};
         int weapon{-1};
+        skeleton::pose bones{};
+        bool has_bones{false};
         float distance{0.f};
     };
     std::vector<enemy_frame> frame_enemies;
@@ -237,13 +241,33 @@ void visuals::draw() {
         }
     }
 
+    // Bones are read after the straddle check so they come from the same
+    // game frame as the box. Points far from the body (hierarchy rebuilt
+    // under us) are dropped instead of drawn across the screen.
+    if (cfg::esp::skeleton) {
+        crash::stage("esp-skeleton");
+        for (enemy_frame& e : frame_enemies) {
+            if (!skeleton::read(*e.snap, e.bones)) continue;
+            for (int bone = 0; bone < skeleton::BoneCount; ++bone)
+                if (e.bones.has(bone) && calculate_distance(e.bones.point[size_t(bone)], e.position) > 3.f)
+                    e.bones.present &= ~(1ULL << bone);
+            e.has_bones = e.bones.present != 0;
+        }
+    }
+
     // Feed the interpolator with the (consistent) samples and replace the
-    // rendered positions by the interpolated ones.
+    // rendered positions by the interpolated ones. The skeleton is moved by
+    // the same offset so it stays inside the interpolated box.
     const long long sample_us = diag::now_us();
     for (enemy_frame& e : frame_enemies) {
         motion_state& m = g_motion[e.object];
         motion_update(m, e.position, e.head, sample_us);
+        const Vector3 raw_feet = e.position;
         if (cfg::esp::smooth) motion_render(m, sample_us, e.position, e.head);
+        if (e.has_bones) {
+            const Vector3 shift = e.position - raw_feet;
+            for (Vector3& point : e.bones.point) point = point + shift;
+        }
     }
 
     // Camera selection. The controller camera whose bor is
@@ -359,6 +383,7 @@ void visuals::draw() {
         float inv_dist = 1.f / (Enemy.distance + 0.1f);
         float font_sz = std::clamp(400.f * inv_dist, 10.f, 18.f);
 
+        if (cfg::esp::skeleton && Enemy.has_bones) dskeleton(Enemy.bones, ViewMatrix, ProjectionMatrix, 1.f);
         if (cfg::esp::box) dbox(BoxMin, BoxMax, 1.f);
         if (cfg::esp::health) dhp(Enemy.hp, Enemy.max_hp, BoxMin, BoxMax, bh, 1.f);
         if (cfg::esp::name) {
@@ -548,6 +573,46 @@ void visuals::dnick(const char* name, const ImVec2& box_max, float cx, float sz,
         static_cast<int>(cfg::esp::name_col.w * 255 * a)
     );
     draw_text_outlined(dl, espFont, sz, tp, col, name);
+}
+
+void visuals::dskeleton(const skeleton::pose& bones, const matrix& view, const matrix& projection, float a) {
+    if (a < 0.01f) return;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    const ImU32 col = IM_COL32(
+        static_cast<int>(cfg::esp::box_col.x * 255),
+        static_cast<int>(cfg::esp::box_col.y * 255),
+        static_cast<int>(cfg::esp::box_col.z * 255),
+        static_cast<int>(cfg::esp::box_col.w * 255 * a)
+    );
+    const ImU32 shadow = IM_COL32(0, 0, 0, int(160 * a));
+    std::array<ImVec2, skeleton::BoneCount> screen{};
+    uint64_t visible = 0;
+    for (int bone = 0; bone < skeleton::BoneCount; ++bone)
+        if (bones.has(bone) && world_to_screen(bones.point[size_t(bone)], view, projection, screen[size_t(bone)]))
+            visible |= 1ULL << bone;
+    auto chain = [&](const int* ids, size_t n) {
+        int prev = -1;
+        for (size_t i = 0; i < n; ++i) {
+            const int bone = ids[i];
+            if (!((visible >> bone) & 1ULL)) continue;
+            if (prev >= 0) {
+                dl->AddLine(screen[size_t(prev)], screen[size_t(bone)], shadow, 3.f);
+                dl->AddLine(screen[size_t(prev)], screen[size_t(bone)], col, 1.5f);
+            }
+            prev = bone;
+        }
+    };
+    chain(skeleton::k_chain_spine, std::size(skeleton::k_chain_spine));
+    // Arms hang off UpperChest, or Chest when the rig has no UpperChest.
+    const int top = ((visible >> skeleton::UpperChest) & 1ULL) ? skeleton::UpperChest : skeleton::Chest;
+    for (const int* arm : {skeleton::k_chain_left_arm, skeleton::k_chain_right_arm}) {
+        int ids[5];
+        std::copy(arm, arm + 5, ids);
+        ids[0] = top;
+        chain(ids, 5);
+    }
+    chain(skeleton::k_chain_left_leg, std::size(skeleton::k_chain_left_leg));
+    chain(skeleton::k_chain_right_leg, std::size(skeleton::k_chain_right_leg));
 }
 
 // Weapon icon under the box (weapon font glyph); the name when the weapon
