@@ -32,3 +32,29 @@ jobs:
             bycmd/libs/arm64-v8a/eeeww
             bycmd/obj/local/arm64-v8a/eeeww
           if-no-files-found: error
+
+  ndk-build-cloudhack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+          local-cache: true
+
+      - name: Build native binary
+        working-directory: cloudhack
+        env:
+          BYCMD_BUILD_ID: ${{ github.sha }}
+        run: ndk-build -j"$(nproc)" NDK_DEBUG=0
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: eeeww-cloudhack-arm64-v8a-${{ github.sha }}
+          path: |
+            cloudhack/libs/arm64-v8a/eeeww
+            cloudhack/obj/local/arm64-v8a/eeeww
+          if-no-files-found: error
