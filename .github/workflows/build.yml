@@ -42,7 +42,7 @@ jobs:
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26d
-          local-cache: true
+          local-cache: false
 
       - name: Build native binary
         working-directory: cloudhack
