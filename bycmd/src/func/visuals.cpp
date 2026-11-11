@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 extern ImFont* espFont;
+extern ImFont* weaponFont;
 
 static void esp_wait(const char* stage) {
     static long long last = 0;
@@ -367,10 +368,8 @@ void visuals::draw() {
             dnick(label, BoxMax, cx, font_sz, 1.f);
         }
         if (cfg::esp::weapon) {
-            if (const char* weapon_name = weapon::name(Enemy.weapon)) {
-                const float y = BoxMax.y + 4.f + (cfg::esp::name && espFont ? font_sz + 2.f : 0.f);
-                dweapon(weapon_name, cx, y, font_sz, 1.f);
-            }
+            const float y = BoxMax.y + 4.f + (cfg::esp::name && espFont ? font_sz + 2.f : 0.f);
+            dweapon(Enemy.weapon, cx, y, BoxMax.x - BoxMin.x, font_sz, 1.f);
         }
     }
     // PROBE (read-only, opt-in): while /data/local/tmp/bycmd_probe exists, dumps the szi bytes
@@ -551,16 +550,33 @@ void visuals::dnick(const char* name, const ImVec2& box_max, float cx, float sz,
     draw_text_outlined(dl, espFont, sz, tp, col, name);
 }
 
-void visuals::dweapon(const char* label, float cx, float y, float sz, float a) {
-    if (!espFont || a < 0.01f || !label) return;
+// Weapon icon under the box (weapon font glyph); the name when the weapon
+// has no glyph or the icon font did not load.
+void visuals::dweapon(int weapon_id, float cx, float y, float box_w, float sz, float a) {
+    const char* label = weapon::name(weapon_id);
+    if (!label || a < 0.01f) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    const ImVec2 ts = espFont->CalcTextSizeA(sz, FLT_MAX, 0.f, label);
     const ImU32 col = IM_COL32(
         static_cast<int>(cfg::esp::box_col.x * 255),
         static_cast<int>(cfg::esp::box_col.y * 255),
         static_cast<int>(cfg::esp::box_col.z * 255),
         static_cast<int>(cfg::esp::box_col.w * 255 * a)
     );
+    const char glyph = weapon::glyph(weapon_id);
+    if (glyph && weaponFont) {
+        const char icon[2] = {glyph, 0};
+        // Height follows the distance-scaled label size; the icon is then
+        // shrunk so it never gets much wider than the box.
+        float h = std::clamp(sz * 1.6f, 16.f, 34.f);
+        const ImVec2 base = weaponFont->CalcTextSizeA(h, FLT_MAX, 0.f, icon);
+        const float max_w = std::max(box_w * 1.2f, 36.f);
+        if (base.x > max_w && base.x > 0.f) h = std::max(10.f, h * max_w / base.x);
+        const ImVec2 ts = weaponFont->CalcTextSizeA(h, FLT_MAX, 0.f, icon);
+        draw_text_outlined(dl, weaponFont, h, ImVec2(roundf(cx - ts.x * 0.5f), roundf(y)), col, icon);
+        return;
+    }
+    if (!espFont) return;
+    const ImVec2 ts = espFont->CalcTextSizeA(sz, FLT_MAX, 0.f, label);
     draw_text_outlined(dl, espFont, sz, ImVec2(roundf(cx - ts.x * 0.5f), roundf(y)), col, label);
 }
 
