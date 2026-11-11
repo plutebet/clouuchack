@@ -1,7 +1,7 @@
 // ================================================================================
 // cloudhack menu: a compact panel anchored under the watermark.
 //   Box / Name / Health / Weapon / Skeleton - toggle switches
-//   Trigger / Visible                       - trigger on/off, skip enemies behind walls
+//   Trigger                                 - trigger on/off (lock time + tap)
 //   Lock / Delay / Cooldown                 - trigger timings in ms (- / + steps)
 //   Color                                   - one ESP colour (box, health bar)
 //   fire point                              - press, then tap the fire button on screen
@@ -355,7 +355,6 @@ namespace ui::menu {
             {"Weapon", &cfg::esp::weapon},
             {"Skeleton", &cfg::esp::skeleton},
             {"Trigger", &cfg::trigger::enabled},
-            {"Visible", &cfg::trigger::visible_only},
         };
         for (const item& it : items) {
             bool v = *it.value;

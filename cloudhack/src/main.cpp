@@ -380,8 +380,9 @@ static int run_overlay(const options& opts) {
     crash::stage("shutdown");
     diag::log("INFO", "shutting down (code=%d)", exit_code);
     scanner::stop();
-    touch::shutdown();
-    shutdown();
+    // No touch / ImGui / EGL teardown here: every caller _exit()s right after
+    // this returns, which drops the overlay layer. The teardown raced the
+    // detached touch threads, which still hold ImGuiIO pointers.
     if (instance_lock >= 0) ::close(instance_lock);
     return exit_code;
 }

@@ -18,7 +18,6 @@ namespace menu {
 
 namespace trigger {
     inline bool enabled = false;          // off by default, nothing fires on launch
-    inline bool visible_only = true;      // Linecast from the camera, skip enemies behind walls
     inline int lock_ms = 80;              // time checker: enemy must stay on the crosshair this long
     inline int tap_delay_ms = 30;         // delay between the lock and the tap
     inline int cooldown_ms = 150;         // minimum gap between two taps
