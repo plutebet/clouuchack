@@ -20,34 +20,54 @@
 #include <unordered_map>
 
 namespace weapon {
-    struct id_name { uint8_t id; const char* name; };
+    struct id_name { uint8_t id; const char* name; char glyph; };
 
     // WeaponIds static readonly values, measured from WeaponIds..cctor
     // (RVA 0x9CADAE0) in libunity build-id 69815f2befe135c2: each field is
     // WeaponId(byte) built from an immediate. Gameplay-only ids (mines,
     // turrets, event weapons) are kept so they are not shown as unknown.
+    //
+    // glyph: character of includes/fonts/esp/weapon.h, matched by silhouette
+    // from a render of the font; 0 = no icon, the name is drawn instead.
+    // Not confirmed in game, matched only by elimination among the
+    // remaining glyphs: M4A1 'u', M16 'r', VAL 'z', FabM 'v', Mallard 't'.
     inline constexpr id_name k_ids[] = {
-        {0x0B, "G22"},        {0x0C, "USP"},        {0x0D, "P350"},       {0x0F, "Deagle"},
-        {0x10, "Tec-9"},      {0x11, "Five-seveN"}, {0x12, "Berettas"},   {0x20, "UMP45"},
-        {0x21, "Akimbo Uzi"}, {0x22, "MP7"},        {0x23, "P90"},        {0x24, "MP5"},
-        {0x25, "MAC10"},      {0x2A, "VAL"},        {0x2B, "M4A1"},       {0x2C, "AKR"},
-        {0x2D, "AKR12"},      {0x2E, "M4"},         {0x2F, "M16"},        {0x30, "FAMAS"},
-        {0x31, "FN FAL"},     {0x33, "AWM"},        {0x34, "M40"},        {0x35, "M110"},
-        {0x36, "Mallard"},    {0x3E, "SM1014"},     {0x3F, "FabM"},       {0x40, "M60"},
-        {0x41, "SPAS"},       {0x46, "Knife"},      {0x47, "Hands"},      {0x5B, "HE"},
-        {0x5C, "Smoke"},      {0x5D, "Flash"},      {0x5E, "Molotov"},    {0x5F, "Incendiary"},
-        {0x64, "Bomb"},       {0x65, "Defuser"},    {0x66, "Defuse kit"}, {0x6E, "Vest"},
-        {0x6F, "Vest+Helmet"},{0x70, "Mine"},       {0x71, "Turret"},     {0x72, "Explosion"},
-        {0x73, "Stun mine"},  {0x74, "Return mark"},{0x75, "Electricity"},{0x76, "Fire"},
-        {0x77, "Teleport"},   {0x78, "Clown"},      {0x79, "Buff"},       {0x7A, "Stun grenade"},
-        {0x7B, "Cleaver"},    {0x7C, "Deagle Clown"},{0x7D, "Event SPAS"},{0x7E, "Ghost hands"},
-        {0x7F, "Pudge"},      {0x80, "Ghost clone"},{0x81, "Chandelier"},
+        {0x0B, "G22", 'a'},          {0x0C, "USP", 'b'},          {0x0D, "P350", 'c'},
+        {0x0F, "Deagle", 'g'},       {0x10, "Tec-9", 'e'},        {0x11, "Five-seveN", 'f'},
+        {0x12, "Berettas", 'd'},     {0x20, "UMP45", 'i'},        {0x21, "Akimbo Uzi", 'l'},
+        {0x22, "MP7", 'k'},          {0x23, "P90", 'm'},          {0x24, "MP5", 'j'},
+        {0x25, "MAC10", 'h'},        {0x2A, "VAL", 'z'},          {0x2B, "M4A1", 'u'},
+        {0x2C, "AKR", 's'},          {0x2D, "AKR12", 'p'},        {0x2E, "M4", 'q'},
+        {0x2F, "M16", 'r'},          {0x30, "FAMAS", 'o'},        {0x31, "FN FAL", 'n'},
+        {0x33, "AWM", 'C'},          {0x34, "M40", 'A'},          {0x35, "M110", 'B'},
+        {0x36, "Mallard", 't'},      {0x3E, "SM1014", 'w'},       {0x3F, "FabM", 'v'},
+        {0x40, "M60", 'y'},          {0x41, "SPAS", 'x'},         {0x46, "Knife", 'L'},
+        {0x47, "Hands", 0},          {0x5B, "HE", 'E'},           {0x5C, "Smoke", 'I'},
+        {0x5D, "Flash", 'F'},        {0x5E, "Molotov", 'G'},      {0x5F, "Incendiary", 'H'},
+        {0x64, "Bomb", 'D'},         {0x65, "Defuser", 0},        {0x66, "Defuse kit", 0},
+        {0x6E, "Vest", 0},           {0x6F, "Vest+Helmet", 0},    {0x70, "Mine", 0},
+        {0x71, "Turret", 0},         {0x72, "Explosion", 0},      {0x73, "Stun mine", 0},
+        {0x74, "Return mark", 0},    {0x75, "Electricity", 0},    {0x76, "Fire", 0},
+        {0x77, "Teleport", 'E'},     {0x78, "Clown", 'E'},        {0x79, "Buff", 'E'},
+        {0x7A, "Stun grenade", 'E'}, {0x7B, "Cleaver", 0},        {0x7C, "Deagle Clown", 'g'},
+        {0x7D, "Event SPAS", 'x'},   {0x7E, "Ghost hands", 0},    {0x7F, "Pudge", 0},
+        {0x80, "Ghost clone", 0},    {0x81, "Chandelier", 0},
     };
 
-    inline const char* name(int id) {
+    inline const id_name* find(int id) {
         for (const id_name& e : k_ids)
-            if (e.id == id) return e.name;
+            if (e.id == id) return &e;
         return nullptr;
+    }
+
+    inline const char* name(int id) {
+        const id_name* e = find(id);
+        return e ? e->name : nullptr;
+    }
+
+    inline char glyph(int id) {
+        const id_name* e = find(id);
+        return e ? e->glyph : 0;
     }
 
     struct player_weapon {

@@ -45,6 +45,7 @@ extern ImFont* fontDesc;
 extern ImFont* espFont;
 extern ImFont* fontMenu;   // cloudhack menu labels (Vanta Medium, 36 base px)
 extern ImFont* fontWm;     // watermark "cloudhack" (Vanta Medium, 54 base px)
+extern ImFont* weaponFont; // weapon icons (furry_coder-Weapon-Font), nullptr when unavailable
 extern ImTextureID g_avatar_tex; // watermark avatar (GL texture), nullptr when unavailable
 extern int native_window_screen_x, native_window_screen_y;
 extern unsigned g_swap_failures;             // total eglSwapBuffers failures

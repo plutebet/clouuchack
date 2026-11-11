@@ -9,6 +9,7 @@
 #include "Android_draw/draw.h"
 #include "fonts/menu/pixeloperator.h"
 #include "fonts/esp/esp.h"
+#include "fonts/esp/weapon.h"
 #include "fonts/menu/avatar.h"
 #include <cmath>
 #include <cstdint>
@@ -25,6 +26,7 @@ ImFont* fontDesc;
 ImFont* espFont;
 ImFont* fontMenu = nullptr;
 ImFont* fontWm = nullptr;
+ImFont* weaponFont = nullptr;
 ImTextureID g_avatar_tex = nullptr;
 static GLuint g_avatar_gl = 0;
 
@@ -150,6 +152,12 @@ bool ImGui_init() {
         if (k > 3.f) k = 3.f;
         fontMenu = io.Fonts->AddFontFromMemoryTTF(esp, sizeof(esp), roundf(36.f * k), &fc, io.Fonts->GetGlyphRangesCyrillic());
         fontWm = io.Fonts->AddFontFromMemoryTTF(esp, sizeof(esp), roundf(54.f * k), &fc, io.Fonts->GetGlyphRangesCyrillic());
+    }
+    // Weapon icon font (furry_coder-Weapon-Font): glyphs on 0-9 A-O a-z.
+    // Optional: without it the ESP falls back to the weapon name.
+    {
+        static const ImWchar weapon_ranges[] = {0x0030, 0x007A, 0};
+        weaponFont = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(weapon_raw), sizeof(weapon_raw), 40.f, &fc, weapon_ranges);
     }
     if (!fontBold || !fontMedium || !fontDesc || !espFont || !fontMenu || !fontWm) {
         // The menu dereferences fontBold/fontMedium/fontDesc directly; a bad
