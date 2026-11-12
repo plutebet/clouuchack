@@ -191,6 +191,19 @@ namespace skeleton {
         }
         static long long last_log = 0;
         if (diag::every(last_log, 10000)) {
+            // Once per session: the raw words around the first bone's native Transform,
+            // so the index field can be confirmed from the log.
+            static bool words_logged = false;
+            if (!words_logged && !map.empty()) {
+                words_logged = true;
+                const uint64_t n0 = rpm<uint64_t>(map.front().second + v100::unity_cached_ptr);
+                uint64_t w[9]{};
+                if (obj_ptr(n0)) mem_read(n0 + 0x10, w, sizeof(w));
+                diag::log("SKELETON", "first bone native words +0x10..+0x50: %llx %llx %llx %llx %llx %llx %llx %llx %llx",
+                          (unsigned long long)w[0], (unsigned long long)w[1], (unsigned long long)w[2],
+                          (unsigned long long)w[3], (unsigned long long)w[4], (unsigned long long)w[5],
+                          (unsigned long long)w[6], (unsigned long long)w[7], (unsigned long long)w[8]);
+            }
             diag::log("SKELETON", "player=0x%llx model=0x%llx bones=%zu/%zu",
                       (unsigned long long)p.object, (unsigned long long)c.model, c.bones.size(), map.size());
 

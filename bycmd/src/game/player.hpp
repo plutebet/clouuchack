@@ -95,8 +95,12 @@ namespace player {
         if (g_transform_layout.data_offset >= 0 &&
             decode_transform(native, g_transform_layout.data_offset, g_transform_layout.index_offset,
                              g_transform_layout.entries_offset, g_transform_layout.parents_offset, out)) return true;
-        if (decode_transform(native, 0x38, 0x40, 0x18, 0x20, out)) {
-            g_transform_layout = {0x38, 0x40, 0x18, 0x20, proc::pid};
+        // Unity 6 native Transform: hierarchy pointer at +0x28, the transform index
+        // right after it at +0x30 (TransformAccess {hierarchy, index}). The old
+        // +0x38/+0x40 guess missed; the probe then took +0x10, which only happens
+        // to hold 0 for the root, so the root worked and every child failed.
+        if (decode_transform(native, 0x28, 0x30, 0x18, 0x20, out)) {
+            g_transform_layout = {0x28, 0x30, 0x18, 0x20, proc::pid};
             return true;
         }
 
