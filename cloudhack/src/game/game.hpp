@@ -129,24 +129,6 @@ namespace v100 {
     inline constexpr uint64_t weapon_part_team = 0x40;            // WeaponContext.Team (byte) @+0x10
     inline constexpr uint64_t weapon_part_active = 0x80;          // WeaponContext.ActiveWeapon : jrx @+0x50
     inline constexpr uint64_t weapon_id = 0x10;                   // jrx.<oqrg> WeaponId { byte Raw }
-
-    // ---- skeleton (dump.cs 1.1.0) ----
-    inline constexpr uint64_t transform_typeinfo = 0xCD2BB30;     // UnityEngine.Transform_TypeInfo (script.json)
-    inline constexpr uint64_t model_root = 0x20;                  // bis.<dcul> Transform (character root)
-    inline constexpr uint64_t model_bindings = 0x30;              // bis.<jdrx> CharacterBindings
-    inline constexpr uint64_t bindings_bones = 0x20;              // CharacterBindings._bones : BonesDictionary
-    // SerializableDictionaryBase<HumanBodyBones, Transform, Transform> and
-    // Dictionary<,> are fully shared generics (no concrete code to read the
-    // offsets from); these follow declaration order and are checked at
-    // runtime: every value must be a UnityEngine.Transform.
-    inline constexpr uint64_t sdict_dict = 0x10;                  // m_dict : Dictionary<HumanBodyBones, Transform>
-    inline constexpr uint64_t sdict_keys = 0x18;                  // m_keys : HumanBodyBones[]
-    inline constexpr uint64_t sdict_values = 0x20;                // m_values : Transform[]
-    inline constexpr uint64_t dict_entries = 0x18;                // _entries : Entry[] (after _buckets)
-    inline constexpr uint64_t dict_count = 0x20;                  // _count
-    inline constexpr uint64_t dict_entry_size = 0x18;             // Entry { int hashCode; int next; int key; Transform value }
-    inline constexpr uint64_t dict_entry_key = 0x08;
-    inline constexpr uint64_t dict_entry_value = 0x10;
 }
 
 struct remote_map { uint64_t begin{}, end{}; bool writable{}; };
