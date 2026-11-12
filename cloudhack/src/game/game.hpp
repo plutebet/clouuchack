@@ -204,11 +204,26 @@ inline bool obj_ptr(uint64_t p) { return p >= 0x100000000ULL && p < 0x8000000000
 // (observed 0x2002xxxx for kmc/wot during a whole match, because they are
 // constructed through generic/DI paths that never initialise the global
 // slot). Such a value must never be compared against object headers.
+// An initialised slot never changes for the life of the process, so it is
+// read once per thread and library; a lazy slot is re-read until it fills.
 inline uint64_t typeinfo(uint64_t rva, uint64_t lib = 0) {
     const uint64_t base = lib ? lib : proc::lib;
     if (!base) return 0;
+    struct slot { uint64_t rva, value; };
+    thread_local uint64_t cache_lib = 0;
+    thread_local int cache_pid = -1;
+    thread_local std::vector<slot> cache;
+    if (cache_lib != base || cache_pid != proc::pid) {
+        cache.clear();
+        cache_lib = base;
+        cache_pid = proc::pid;
+    }
+    for (const slot& s : cache)
+        if (s.rva == rva) return s.value;
     const uint64_t value = rpm<uint64_t>(base + rva);
-    return obj_ptr(value) ? value : 0;
+    if (!obj_ptr(value)) return 0;
+    cache.push_back({rva, value});
+    return value;
 }
 
 // ---- il2cpp klass name resolution (sanity checks only) ----
@@ -611,7 +626,10 @@ namespace scanner {
             const bool registry_known = !essential_missing || g_results.registry != 0;
             long long interval = 15000;
             if (registry_known && idle_passes > 0) interval = std::min<long long>(120000, 15000LL << std::min<unsigned>(idle_passes, 3));
-            const bool due = (g_rescan && since_pass > 3000) ||
+            // A requested rescan (camera lock lost, registry gone) reads the
+            // whole GC heap; at most one every 20 s, the periodic pass below
+            // still covers discovery.
+            const bool due = (g_rescan && (last_pass == 0 || since_pass > 20000)) ||
                              ((essential_missing || g_want_more) && since_pass > interval);
             if (!due) {
                 sleep_ms(100);
@@ -707,10 +725,7 @@ struct player_snapshot {
     bool is_local() const { return flags[g_local_flag_offset - int(v100::player_local)] != 0; }
 };
 
-inline bool read_player_snapshot(uint64_t object, uint64_t player_class, player_snapshot& out) {
-    if (!obj_ptr(object)) return false;
-    uint8_t block[0x98]{};
-    if (!mem_read(object, block, sizeof(block))) return false;
+inline bool decode_player_snapshot(uint64_t object, const uint8_t* block, uint64_t player_class, player_snapshot& out) {
     uint64_t klass = 0;
     std::memcpy(&klass, block, 8);
     if (klass != player_class) return false;
@@ -724,6 +739,13 @@ inline bool read_player_snapshot(uint64_t object, uint64_t player_class, player_
     out.view_mode = block[v100::player_view_mode];
     out.team = block[v100::player_team];
     return out.world != 0;
+}
+
+inline bool read_player_snapshot(uint64_t object, uint64_t player_class, player_snapshot& out) {
+    if (!obj_ptr(object)) return false;
+    uint8_t block[0x98]{};
+    if (!mem_read(object, block, sizeof(block))) return false;
+    return decode_player_snapshot(object, block, player_class, out);
 }
 
 inline int resolve_local_flag(const std::vector<player_snapshot>& objects) {
@@ -767,9 +789,28 @@ inline std::vector<player_snapshot> players() {
     std::vector<player_snapshot> current;
     std::vector<uint64_t> items(size_t(count), 0);
     if (count > 0 && !mem_read(array + v100::array_data, items.data(), items.size() * 8)) return out;
+    // Player blocks are fetched in scatter batches and decoded locally; an
+    // unreadable object only drops itself (per-part retry in the scatter).
+    constexpr size_t kBlock = 0x98;
+    std::vector<uint8_t> blocks(size_t(count) * kBlock, 0);
+    std::vector<uint8_t> fetched(size_t(count), 0);
+    for (int start = 0; start < count; start += 64) {
+        read_part parts[64];
+        int index[64];
+        size_t n = 0;
+        for (int i = start; i < count && i < start + 64; ++i) {
+            if (!obj_ptr(items[size_t(i)])) continue;
+            parts[n] = {items[size_t(i)], blocks.data() + size_t(i) * kBlock, kBlock};
+            index[n++] = i;
+        }
+        bool ok[64];
+        if (n) mem_read_scatter(parts, n, ok);
+        for (size_t k = 0; k < n; ++k) if (ok[k]) fetched[size_t(index[k])] = 1;
+    }
     for (int i = 0; i < count; ++i) {
         player_snapshot snap{};
-        if (!read_player_snapshot(items[size_t(i)], player_class, snap)) continue;
+        if (!fetched[size_t(i)] ||
+            !decode_player_snapshot(items[size_t(i)], blocks.data() + size_t(i) * kBlock, player_class, snap)) continue;
         ++raw_exact;
         if (!active_world || snap.is_local()) active_world = snap.world;
         cache_player(snap.object, snap.id, now);
@@ -991,8 +1032,11 @@ inline bool detect_pair(uint64_t obj, matrix& view, matrix& projection,
 // Re-read a pattern-located matrix pair. Two syscalls per frame.
 inline bool read_matrix_pair(uint64_t native, int view_off, int proj_off, matrix& view, matrix& projection) {
     if (!native || view_off < 0 || proj_off < 0) return false;
-    if (!mem_read(native + uint64_t(view_off), &view, sizeof(view)) ||
-        !mem_read(native + uint64_t(proj_off), &projection, sizeof(projection))) return false;
+    const read_part parts[] = {
+        {native + uint64_t(view_off), &view, sizeof(view)},
+        {native + uint64_t(proj_off), &projection, sizeof(projection)},
+    };
+    if (!mem_read_scatter(parts, 2)) return false;
     return matrix_window_sane(reinterpret_cast<const float*>(&view), true) &&
            matrix_window_sane(reinterpret_cast<const float*>(&projection), false);
 }

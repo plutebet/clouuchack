@@ -435,6 +435,12 @@ namespace player {
         uint64_t parents{0};
         int index{-1};
         bool valid{false};
+        // Self + ancestors (index first, root last), resolved at revalidation
+        // so a frame reads the whole chain in one call. 0 = not resolved: the
+        // frame falls back to walking the parents remotely.
+        static constexpr int kMaxChain = 48;
+        int chain[kMaxChain]{};
+        int chain_len{0};
     };
     struct transform_cache_entry {
         uint64_t mtc{0};
@@ -467,11 +473,47 @@ namespace player {
         ref.parents = parents;
         ref.index = index;
         ref.valid = true;
+
+        // Parent indices 0..index in one read; Unity keeps a hierarchy in
+        // depth-first order, so every ancestor has a lower index. Anything
+        // else leaves chain_len at 0 and the slow path handles the frame.
+        std::vector<int32_t> parent_block(size_t(index) + 1);
+        if (mem_read(parents, parent_block.data(), parent_block.size() * sizeof(int32_t))) {
+            int len = 0;
+            int node = index;
+            while (len < hierarchy_ref::kMaxChain) {
+                ref.chain[len++] = node;
+                const int parent = parent_block[size_t(node)];
+                if (parent == -1) { ref.chain_len = len; break; }
+                if (parent < 0 || parent >= node) break;
+                node = parent;
+            }
+        }
         return true;
     }
 
     inline bool hierarchy_position(const hierarchy_ref& ref, Vector3& out) noexcept {
         if (!ref.valid) return false;
+        if (ref.chain_len > 0) {
+            TransformEntry chain[hierarchy_ref::kMaxChain];
+            read_part parts[hierarchy_ref::kMaxChain];
+            for (int i = 0; i < ref.chain_len; ++i)
+                parts[i] = {ref.entries + uint64_t(ref.chain[i]) * sizeof(TransformEntry), &chain[i], sizeof(TransformEntry)};
+            if (!mem_read_scatter(parts, size_t(ref.chain_len))) return false;
+            if (!entry_valid(chain[0])) return false;
+            Vector3 result(chain[0].position.x, chain[0].position.y, chain[0].position.z);
+            for (int i = 1; i < ref.chain_len; ++i) {
+                const TransformEntry& entry = chain[i];
+                if (!entry_valid(entry)) return false;
+                Vector3 scaled(result.x * entry.scale.x, result.y * entry.scale.y, result.z * entry.scale.z);
+                result = rotate(entry.rotation, scaled) + Vector3(entry.position.x, entry.position.y, entry.position.z);
+            }
+            if (!std::isfinite(result.x) || !std::isfinite(result.y) || !std::isfinite(result.z) ||
+                std::fabs(result.x) > 100000.f || std::fabs(result.y) > 100000.f || std::fabs(result.z) > 100000.f)
+                return false;
+            out = result;
+            return true;
+        }
         TransformEntry current{};
         if (!mem_read(ref.entries + uint64_t(ref.index) * sizeof(TransformEntry), &current, sizeof(current)) ||
             !entry_valid(current)) return false;

@@ -156,6 +156,47 @@ inline T rpm(uint64_t a) {
     return v;
 }
 
+// Several remote reads in one process_vm_readv. Every call takes the game's
+// mmap lock, so per-field reads at the display rate were what the game felt
+// as lost frames. When the combined read comes back short (one address
+// unmapped), each part is retried on its own; `ok` (optional) receives the
+// per-part result and the return value says whether every part succeeded.
+struct read_part {
+    uint64_t addr;
+    void* dst;
+    size_t size;
+};
+
+inline bool mem_read_scatter(const read_part* parts, size_t count, bool* ok = nullptr) {
+    constexpr size_t kMax = 64;
+    if (ok) for (size_t i = 0; i < count; ++i) ok[i] = false;
+    if (proc::pid < 0 || !parts || count == 0 || count > kMax) return false;
+    struct iovec loc[kMax];
+    struct iovec rem[kMax];
+    size_t total = 0;
+    bool usable = true;
+    for (size_t i = 0; i < count && usable; ++i) {
+        if (parts[i].addr < 0x1000 || !parts[i].dst || parts[i].size == 0) { usable = false; break; }
+        loc[i].iov_base = parts[i].dst;
+        loc[i].iov_len = parts[i].size;
+        rem[i].iov_base = reinterpret_cast<void*>(parts[i].addr);
+        rem[i].iov_len = parts[i].size;
+        total += parts[i].size;
+    }
+    if (usable && sys::vm_read(proc::pid, loc, count, rem, count) == static_cast<long>(total)) {
+        if (ok) for (size_t i = 0; i < count; ++i) ok[i] = true;
+        return true;
+    }
+    bool all = true;
+    for (size_t i = 0; i < count; ++i) {
+        const bool good = parts[i].addr >= 0x1000 && mem_read(parts[i].addr, parts[i].dst, parts[i].size);
+        if (ok) ok[i] = good;
+        all = all && good;
+        if (!good && !ok) return false;
+    }
+    return all;
+}
+
 inline int get_pid() {
     int pfd = sys::openat(AT_FDCWD, oxorany("/proc"), O_RDONLY | O_DIRECTORY);
     if (pfd < 0) return -1;
@@ -495,11 +536,11 @@ namespace game {
             tick = 0;
             return false;
         }
-        tick++;
-        if (tick >= 600) {
-            // The package can be restarted under a new pid while the old one
-            // is still tearing down; re-resolve the pid by cmdline now and then.
-            tick = 0;
+        // The package can be restarted under a new pid while the old one is
+        // still tearing down: re-resolve the pid by cmdline every 10 s. The
+        // /proc walk costs milliseconds, so it must not follow the frame rate.
+        static long long last_pid_check = 0;
+        if (diag::every(last_pid_check, 10000)) {
             const int p = get_pid();
             if (p > 0 && p != proc::pid) {
                 if (proc::pm >= 0) { sys::close(proc::pm); proc::pm = -1; }
