@@ -72,7 +72,7 @@ struct heartbeat {
 static heartbeat* g_hb = nullptr;
 
 static void usage() {
-    std::printf("cloudhack 1.2 external ESP\n"
+    std::printf("cloudhack 2.0 external ESP\n"
                 "  --diag              probe overlay/EGL/process and exit\n"
                 "  --no-launch         do not start the game package\n"
                 "  --skip-build-check  run even if libunity build-id does not match the profile\n"
@@ -144,7 +144,7 @@ static int run_overlay(const options& opts) {
     ::signal(SIGTERM, on_signal);
     ::signal(SIGHUP, on_signal);
 
-    diag::log("INFO", "cloudhack 1.2 external ESP starting profile=%s build=%s pid=%d", v100::profile_name, BYCMD_BUILD_ID, int(getpid()));
+    diag::log("INFO", "cloudhack 2.0 external ESP starting profile=%s build=%s pid=%d", v100::profile_name, BYCMD_BUILD_ID, int(getpid()));
     diag::log("INFO", "device model=%s manufacturer=%s android=%s sdk=%s abi=%s pagesize=%ld uid=%d euid=%d",
               sys_prop("ro.product.model").c_str(), sys_prop("ro.product.manufacturer").c_str(),
               sys_prop("ro.build.version.release").c_str(), sys_prop("ro.build.version.sdk").c_str(),
