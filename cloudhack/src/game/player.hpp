@@ -429,12 +429,19 @@ namespace player {
     // TransformHierarchy {data, index, entries, parents}. Cache them per
     // player, revalidate twice a second, and read only the hierarchy entries
     // every frame (1 read + 2 per parent level per transform).
+    // Ancestor chain of one Transform: chain[0] is its own hierarchy index, chain[k] its k-th
+    // ancestor. Parent indices change only when the hierarchy does, so the chain is built at
+    // revalidation; per frame only the entries it points to are read (one scatter request).
+    inline constexpr int kChainMax = 12;
     struct hierarchy_ref {
         uint64_t native{0};
         uint64_t entries{0};
         uint64_t parents{0};
         int index{-1};
         bool valid{false};
+        int chain[kChainMax]{};
+        int chain_len{0};
+        bool chain_ok{false};   // false: chain too deep or unreadable, use the slow walk
     };
     struct transform_cache_entry {
         uint64_t mtc{0};
@@ -466,6 +473,18 @@ namespace player {
         ref.entries = entries;
         ref.parents = parents;
         ref.index = index;
+        ref.chain[0] = index;
+        ref.chain_len = 1;
+        ref.chain_ok = true;
+        int parent = rpm<int>(parents + uint64_t(index) * sizeof(int));
+        for (int guard = 0; parent >= 0 && parent <= 8192 && guard < 128; ++guard) {
+            if (ref.chain_len >= kChainMax) { ref.chain_ok = false; break; }
+            ref.chain[ref.chain_len++] = parent;
+            const int next = rpm<int>(parents + uint64_t(parent) * sizeof(int));
+            if (next == parent) { ref = {}; return false; }
+            parent = next;
+        }
+        ref.chain_ok = ref.chain_ok && parent == -1;   // -1 = reached the root
         ref.valid = true;
         return true;
     }
@@ -495,6 +514,24 @@ namespace player {
         return true;
     }
 
+    // Same composition as hierarchy_position(), from entries that were already read:
+    // e[0] is the transform itself, e[k] its k-th ancestor (ref.chain order).
+    inline bool chain_position(const hierarchy_ref& ref, const TransformEntry* e, Vector3& out) noexcept {
+        if (!ref.valid || !ref.chain_ok || ref.chain_len <= 0) return false;
+        for (int k = 0; k < ref.chain_len; ++k)
+            if (!entry_valid(e[k])) return false;
+        Vector3 result(e[0].position.x, e[0].position.y, e[0].position.z);
+        for (int k = 1; k < ref.chain_len; ++k) {
+            const TransformEntry& entry = e[k];
+            Vector3 scaled(result.x * entry.scale.x, result.y * entry.scale.y, result.z * entry.scale.z);
+            result = rotate(entry.rotation, scaled) + Vector3(entry.position.x, entry.position.y, entry.position.z);
+        }
+        if (!std::isfinite(result.x) || !std::isfinite(result.y) || !std::isfinite(result.z) ||
+            std::fabs(result.x) > 100000.f || std::fabs(result.y) > 100000.f || std::fabs(result.z) > 100000.f) return false;
+        out = result;
+        return true;
+    }
+
     inline void forget(uint64_t object) { g_transform_cache.erase(object); }
 
     inline bool revalidate(const player_snapshot& p, transform_cache_entry& entry) noexcept {
@@ -518,15 +555,41 @@ namespace player {
         if (!obj_ptr(p.transform)) { forget(p.object); return out; } // despawned / dead NetObject
         transform_cache_entry& entry = g_transform_cache[p.object];
         const long long now = diag::now_us();
-        if (entry.mtc != p.transform || now - entry.validated_us > 500000)
+        if (entry.mtc != p.transform || now - entry.validated_us > 1000000)
             revalidate(p, entry);
         for (int attempt = 0; attempt < 2; ++attempt) {
+            // One scatter read for the entries of every cached chain (at most two transforms).
+            read_req reqs[2 * kChainMax];
+            TransformEntry buf[2 * kChainMax];
+            int first[2] = {0, 0};
+            int n = 0;
+            for (int i = 0; i < entry.count && i < 2; ++i) {
+                const hierarchy_ref& ref = entry.refs[i];
+                first[i] = n;
+                if (!ref.valid || !ref.chain_ok) continue;
+                for (int k = 0; k < ref.chain_len; ++k) {
+                    reqs[n] = read_req{ref.entries + uint64_t(ref.chain[k]) * sizeof(TransformEntry),
+                                       &buf[n], uint32_t(sizeof(TransformEntry)), false};
+                    ++n;
+                }
+            }
+            if (n > 0) mem_read_batch(reqs, size_t(n));
+
             bool found = false;
             float min_y = 1.0e30f, max_y = -1.0e30f;
             Vector3 min_point{}, max_point{};
-            for (int i = 0; i < entry.count; ++i) {
+            for (int i = 0; i < entry.count && i < 2; ++i) {
+                const hierarchy_ref& ref = entry.refs[i];
                 Vector3 point{};
-                if (!hierarchy_position(entry.refs[i], point)) { found = false; break; }
+                bool ok = false;
+                if (ref.valid && ref.chain_ok) {
+                    bool reads_ok = true;
+                    for (int k = 0; k < ref.chain_len; ++k) reads_ok = reads_ok && reqs[first[i] + k].ok;
+                    ok = reads_ok && chain_position(ref, buf + first[i], point);
+                } else {
+                    ok = hierarchy_position(ref, point);
+                }
+                if (!ok) { found = false; break; }
                 if (std::fabs(point.x) < .001f && std::fabs(point.y) < .001f && std::fabs(point.z) < .001f) continue;
                 if (!found || point.y < min_y) { min_y = point.y; min_point = point; }
                 if (!found || point.y > max_y) { max_y = point.y; max_point = point; }
@@ -554,18 +617,44 @@ namespace player {
         return out;
     }
 
-    inline HealthInfo health_info(const player_snapshot& p) noexcept {
-        HealthInfo out{};
-        const uint64_t stats_class = typeinfo(v100::stats_typeinfo);
-        if (!stats_class || !exact_class(p.stats, stats_class)) return out;
-        uint16_t block[3]{};
-        if (!mem_read(p.stats + v100::stats_hp, block, sizeof(block))) return out;
-        const uint16_t hp = block[0];
-        const uint16_t max_hp = block[(v100::stats_max_hp - v100::stats_hp) / 2];
-        if (max_hp == 0 || max_hp > 1000 || max_hp == 0xFFFFU || hp == 0xFFFFU || hp > max_hp) return out;
+    // Health from one 0x18-byte block of the stats object: klass at +0, hp at +0x10, max at +0x14.
+    inline bool health_from_block(const uint8_t* block, uint64_t stats_class, HealthInfo& out) noexcept {
+        out = {};
+        uint64_t klass = 0;
+        std::memcpy(&klass, block, 8);
+        if (!stats_class || klass != stats_class) return false;
+        uint16_t hp = 0, max_hp = 0;
+        std::memcpy(&hp, block + v100::stats_hp, 2);
+        std::memcpy(&max_hp, block + v100::stats_max_hp, 2);
+        if (max_hp == 0 || max_hp > 1000 || max_hp == 0xFFFFU || hp == 0xFFFFU || hp > max_hp) return false;
         out.hp = int(hp);
         out.max_hp = int(max_hp);
         out.valid = true;
+        return true;
+    }
+
+    inline HealthInfo health_info(const player_snapshot& p) noexcept {
+        HealthInfo out{};
+        if (!obj_ptr(p.stats)) return out;
+        uint8_t block[0x18]{};
+        if (!mem_read(p.stats, block, sizeof(block))) return out;
+        health_from_block(block, typeinfo(v100::stats_typeinfo), out);
         return out;
+    }
+
+    // Health of up to 16 players in one scatter read (the ESP reader calls this once per tick).
+    inline void health_batch(const player_snapshot* snaps, size_t n, HealthInfo* out) noexcept {
+        constexpr size_t kMax = 16;
+        if (n > kMax) n = kMax;
+        uint8_t blocks[kMax][0x18];
+        read_req reqs[kMax];
+        const uint64_t stats_class = typeinfo(v100::stats_typeinfo);
+        for (size_t i = 0; i < n; ++i) {
+            out[i] = {};
+            reqs[i] = read_req{obj_ptr(snaps[i].stats) ? snaps[i].stats : 0, blocks[i], 0x18, false};
+        }
+        mem_read_batch(reqs, n);
+        for (size_t i = 0; i < n; ++i)
+            if (reqs[i].ok) health_from_block(blocks[i], stats_class, out[i]);
     }
 }

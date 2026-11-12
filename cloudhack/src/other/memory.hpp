@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <cerrno>
+#include <atomic>
 #include "../protect/oxorany.hpp"
 #include "diag.hpp"
 
@@ -113,6 +114,10 @@ inline bool addr_valid(uint64_t a) {
     return a >= 0x1000;
 }
 
+// Remote read accounting: one count per process_vm_readv call (and per pread fallback). The
+// ESP perf log prints it per tick, so a device run shows what the reads cost.
+inline std::atomic<unsigned long long> g_remote_calls{0};
+
 inline bool mem_read(uint64_t a, void* b, size_t l) {
     if (proc::pid < 0 || a == 0 || l == 0 || b == nullptr) {
         return false;
@@ -130,6 +135,7 @@ inline bool mem_read(uint64_t a, void* b, size_t l) {
     rem[0].iov_base = reinterpret_cast<void*>(a);
     rem[0].iov_len = l;
 
+    g_remote_calls.fetch_add(1, std::memory_order_relaxed);
     ssize_t result = sys::vm_read(proc::pid, loc, 1, rem, 1);
 
     if (result != static_cast<long>(l) && proc::pm >= 0) {
@@ -154,6 +160,54 @@ inline T rpm(uint64_t a) {
     T v{};
     mem_read(a, &v, sizeof(T));
     return v;
+}
+
+// One remote read. `ok` is filled in by mem_read_batch().
+struct read_req {
+    uint64_t addr;
+    void* dst;
+    uint32_t size;
+    bool ok;
+};
+
+// Scatter read: the requests of one chunk go out in a single process_vm_readv call. Each call
+// costs an mm lookup and a ptrace check in the kernel, so per-field reads (hundreds per frame
+// before) were most of the overlay's load on the game. A short chunk is repeated one request at
+// a time: one bad address costs its neighbours one extra call and nothing more.
+inline void mem_read_batch(read_req* reqs, size_t count) {
+    constexpr size_t kChunk = 128;
+    if (!reqs) return;
+    for (size_t base = 0; base < count; base += kChunk) {
+        const size_t n = std::min(kChunk, count - base);
+        struct iovec loc[kChunk];
+        struct iovec rem[kChunk];
+        size_t idx[kChunk];
+        size_t used = 0;
+        size_t total = 0;
+        for (size_t i = 0; i < n; ++i) {
+            read_req& r = reqs[base + i];
+            r.ok = false;
+            if (proc::pid < 0 || r.addr < 0x1000 || r.size == 0 || r.dst == nullptr) continue;
+            loc[used].iov_base = r.dst;
+            loc[used].iov_len = r.size;
+            rem[used].iov_base = reinterpret_cast<void*>(static_cast<uintptr_t>(r.addr));
+            rem[used].iov_len = r.size;
+            idx[used] = base + i;
+            total += r.size;
+            ++used;
+        }
+        if (used == 0) continue;
+        g_remote_calls.fetch_add(1, std::memory_order_relaxed);
+        const long got = long(sys::vm_read(proc::pid, loc, used, rem, used));
+        if (got == long(total)) {
+            for (size_t k = 0; k < used; ++k) reqs[idx[k]].ok = true;
+            continue;
+        }
+        for (size_t k = 0; k < used; ++k) {
+            read_req& r = reqs[idx[k]];
+            r.ok = mem_read(r.addr, r.dst, r.size);
+        }
+    }
 }
 
 inline int get_pid() {
@@ -495,11 +549,11 @@ namespace game {
             tick = 0;
             return false;
         }
-        tick++;
-        if (tick >= 600) {
-            // The package can be restarted under a new pid while the old one
-            // is still tearing down; re-resolve the pid by cmdline now and then.
-            tick = 0;
+        // The package can be restarted under a new pid while the old one is still
+        // tearing down: re-resolve the pid by cmdline every 10 s. A /proc walk costs a
+        // few ms, so it must not run on the frame cadence (it ran every 600 frames).
+        static long long last_pid_check = 0;
+        if (diag::every(last_pid_check, 10000)) {
             const int p = get_pid();
             if (p > 0 && p != proc::pid) {
                 if (proc::pm >= 0) { sys::close(proc::pm); proc::pm = -1; }

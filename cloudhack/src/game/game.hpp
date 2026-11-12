@@ -204,11 +204,27 @@ inline bool obj_ptr(uint64_t p) { return p >= 0x100000000ULL && p < 0x8000000000
 // (observed 0x2002xxxx for kmc/wot during a whole match, because they are
 // constructed through generic/DI paths that never initialise the global
 // slot). Such a value must never be compared against object headers.
+// Per-thread cache of TypeInfo slots. A slot holds the same klass pointer for the whole session,
+// but every call used to be a remote read, and the ESP asks for about ten of them per frame. A
+// valid value is trusted for 2 s; an empty one (lazy slot, not initialised yet) is re-read every
+// 200 ms.
 inline uint64_t typeinfo(uint64_t rva, uint64_t lib = 0) {
     const uint64_t base = lib ? lib : proc::lib;
     if (!base) return 0;
+    struct slot { uint64_t key; uint64_t value; long long at; };
+    static thread_local slot cache[32] = {};
+    static thread_local unsigned next = 0;
+    const uint64_t key = base + rva;
+    slot* s = nullptr;
+    for (slot& c : cache) if (c.key == key) { s = &c; break; }
+    if (!s) { s = &cache[next++ % 32]; s->key = key; s->value = 0; s->at = 0; }
+    const long long now = diag::now_ms();
+    if (s->value && now - s->at < 2000) return s->value;
+    if (!s->value && now - s->at < 200) return 0;
+    s->at = now;
     const uint64_t value = rpm<uint64_t>(base + rva);
-    return obj_ptr(value) ? value : 0;
+    s->value = obj_ptr(value) ? value : 0;
+    return s->value;
 }
 
 // ---- il2cpp klass name resolution (sanity checks only) ----
@@ -524,7 +540,7 @@ namespace scanner {
             uint64_t cursor = map.begin;
             while (cursor < map.end) {
                 if (!g_run || proc::pid != pid) return;
-                size_t bytes = size_t(std::min<uint64_t>(map.end - cursor, 1024 * 1024));
+                size_t bytes = size_t(std::min<uint64_t>(map.end - cursor, 256 * 1024));
                 bytes &= ~size_t(7);
                 if (bytes < 16) break;
                 words.resize(bytes / 8);
@@ -555,9 +571,10 @@ namespace scanner {
                 }
                 cursor += bytes;
                 scanned += bytes;
-                // ~400 MiB/s ceiling keeps one core from being pinned on
-                // weaker devices while the game is rendering.
-                usleep(1500);
+                // Gentle pace: 256 KiB per read, then a 2 ms pause (about 100 MiB/s, so a full
+                // pass takes roughly 40 s). Each process_vm_readv holds the game's mm lock only
+                // briefly, which keeps the game's own allocations and page faults from queueing.
+                usleep(2000);
             }
         }
         local.passes += 1;
@@ -611,7 +628,9 @@ namespace scanner {
             const bool registry_known = !essential_missing || g_results.registry != 0;
             long long interval = 15000;
             if (registry_known && idle_passes > 0) interval = std::min<long long>(120000, 15000LL << std::min<unsigned>(idle_passes, 3));
-            const bool due = (g_rescan && since_pass > 3000) ||
+            // Requested rescans are throttled to one per 20 s: a lost camera lock must not start
+            // a 4 GiB heap walk every few seconds in the middle of a match.
+            const bool due = (g_rescan && since_pass > 20000) ||
                              ((essential_missing || g_want_more) && since_pass > interval);
             if (!due) {
                 sleep_ms(100);
@@ -746,31 +765,80 @@ inline int resolve_local_flag(const std::vector<player_snapshot>& objects) {
     return g_local_flag_offset;
 }
 
+// NetObject header -> snapshot. `block` holds the first 0x98 bytes of the object (read with one
+// scatter request); the klass word decides whether the object is a player.
+inline bool parse_player_block(const uint8_t* block, uint64_t object, uint64_t player_class, player_snapshot& out) {
+    uint64_t klass = 0;
+    std::memcpy(&klass, block, 8);
+    if (klass != player_class) return false;
+    out = {};
+    out.object = object;
+    std::memcpy(&out.id, block + v100::net_object_id, 4);
+    std::memcpy(&out.world, block + v100::player_world, 8);
+    std::memcpy(out.flags, block + v100::player_local, 3);
+    std::memcpy(&out.transform, block + v100::player_transform, 8);
+    std::memcpy(&out.stats, block + v100::player_stats, 8);
+    std::memcpy(&out.camera_state, block + v100::player_camera_state, 8);
+    out.view_mode = block[v100::player_view_mode];
+    out.team = block[v100::player_team];
+    return out.world != 0;
+}
+
 inline std::vector<player_snapshot> players() {
     std::vector<player_snapshot> out;
     if (!registry_ready()) return out;
     const uint64_t player_class = typeinfo(v100::player_typeinfo);
-    uint64_t store = rpm<uint64_t>(g_registry + v100::registry_store);
-    uint64_t list = rpm<uint64_t>(store + v100::store_objects);
-    int count = rpm<int>(list + v100::list_count);
-    uint64_t array = rpm<uint64_t>(list + v100::list_items);
-    if (!player_class || count < 0 || count > 4096 || !array) {
-        diag::log("WARN", "registry became invalid playerClass=0x%llx count=%d array=0x%llx",
-                  (unsigned long long)player_class, count, (unsigned long long)array);
-        g_registry = 0;
-        scanner::request_rescan();
-        return out;
-    }
+    if (!player_class) return out;
     const long long now = diag::now_ms();
+
+    // Full registry walk at 4 Hz. In between, only the objects that were players at the last walk
+    // are re-read, all of them in one scatter request, instead of one read per NetObject of the
+    // match on every tick.
+    static std::vector<uint64_t> known;
+    static std::vector<uint64_t> candidates;
+    static std::vector<read_req> reqs;
+    static std::vector<uint8_t> blocks;
+    static uint64_t walked_registry = 0;
+    static long long last_walk_ms = 0;
+    if (walked_registry != g_registry || last_walk_ms == 0 || now - last_walk_ms >= 250) {
+        const uint64_t store = rpm<uint64_t>(g_registry + v100::registry_store);
+        const uint64_t list = rpm<uint64_t>(store + v100::store_objects);
+        const int registry_count = rpm<int>(list + v100::list_count);
+        const uint64_t array = rpm<uint64_t>(list + v100::list_items);
+        if (registry_count < 0 || registry_count > 4096 || !array) {
+            diag::log("WARN", "registry became invalid playerClass=0x%llx count=%d array=0x%llx",
+                      (unsigned long long)player_class, registry_count, (unsigned long long)array);
+            g_registry = 0;
+            scanner::request_rescan();
+            return out;
+        }
+        candidates.assign(size_t(registry_count), 0);
+        if (registry_count > 0 && !mem_read(array + v100::array_data, candidates.data(), candidates.size() * 8)) return out;
+        walked_registry = g_registry;
+        last_walk_ms = now;
+    } else {
+        candidates = known;
+    }
+    const size_t n = candidates.size();
+    const int count = int(n);
+    reqs.resize(n);
+    blocks.resize(n * 0x98);
+    for (size_t i = 0; i < n; ++i) {
+        const uint64_t object = candidates[i];
+        reqs[i] = read_req{obj_ptr(object) ? object : 0, blocks.data() + i * 0x98, 0x98, false};
+    }
+    mem_read_batch(reqs.data(), n);
+
+    std::vector<player_snapshot> current;
+    known.clear();
     size_t raw_exact = 0;
     uint64_t active_world = 0;
-    std::vector<player_snapshot> current;
-    std::vector<uint64_t> items(size_t(count), 0);
-    if (count > 0 && !mem_read(array + v100::array_data, items.data(), items.size() * 8)) return out;
-    for (int i = 0; i < count; ++i) {
+    for (size_t i = 0; i < n; ++i) {
+        if (!reqs[i].ok) continue;
         player_snapshot snap{};
-        if (!read_player_snapshot(items[size_t(i)], player_class, snap)) continue;
+        if (!parse_player_block(blocks.data() + i * 0x98, candidates[i], player_class, snap)) continue;
         ++raw_exact;
+        known.push_back(candidates[i]);
         if (!active_world || snap.is_local()) active_world = snap.world;
         cache_player(snap.object, snap.id, now);
         current.push_back(snap);
@@ -872,10 +940,16 @@ inline bool noisy_player_name(const std::string& value) {
     return hex || short_lower || repeated;
 }
 
+// Klass of managed strings, from the known string literal (ScriptString index 0).
+inline uint64_t managed_string_class() {
+    const uint64_t known_string = rpm<uint64_t>(proc::lib + v100::player_string_literal);
+    return plausible(known_string) ? rpm<uint64_t>(known_string) : 0;
+}
+
 // Heuristic name lookup: no field in dump.cs 1.1.0 is confirmed to hold the
 // nickname, so this walks the player's component fields for a managed string
 // that looks like a nickname. Treat the result as best-effort.
-inline std::string player_name(uint64_t player) {
+inline std::string player_name(uint64_t player, uint64_t* source = nullptr) {
     const uint64_t known_string = rpm<uint64_t>(proc::lib + v100::player_string_literal);
     const uint64_t string_class = plausible(known_string) ? rpm<uint64_t>(known_string) : 0;
     const uint64_t container = rpm<uint64_t>(player + v100::player_components);
@@ -893,6 +967,7 @@ inline std::string player_name(uint64_t player) {
                 if (!obj_ptr(value)) continue;
                 std::string candidate = read_managed_string(value, string_class);
                 if (candidate.empty() || candidate.size() > 96 || noisy_player_name(candidate)) continue;
+                if (source) *source = value;   // the string object: next time it is read directly
                 return candidate;
             }
         }
@@ -991,8 +1066,10 @@ inline bool detect_pair(uint64_t obj, matrix& view, matrix& projection,
 // Re-read a pattern-located matrix pair. Two syscalls per frame.
 inline bool read_matrix_pair(uint64_t native, int view_off, int proj_off, matrix& view, matrix& projection) {
     if (!native || view_off < 0 || proj_off < 0) return false;
-    if (!mem_read(native + uint64_t(view_off), &view, sizeof(view)) ||
-        !mem_read(native + uint64_t(proj_off), &projection, sizeof(projection))) return false;
+    read_req reqs[2] = {{native + uint64_t(view_off), &view, sizeof(view), false},
+                        {native + uint64_t(proj_off), &projection, sizeof(projection), false}};
+    mem_read_batch(reqs, 2);   // one syscall for both matrices
+    if (!reqs[0].ok || !reqs[1].ok) return false;
     return matrix_window_sane(reinterpret_cast<const float*>(&view), true) &&
            matrix_window_sane(reinterpret_cast<const float*>(&projection), false);
 }

@@ -49,6 +49,7 @@ namespace cam {
         int pid{-1};
         int mismatch_frames{0};
         long long locked_ms{0};
+        long long checked_ms{0};   // last managed -> native validation (4 Hz)
     };
     struct projection_info {
         float fov{0.f};
@@ -263,16 +264,28 @@ namespace cam {
         return read_matrix_pair(g_lock.native, g_lock.view_off, g_lock.proj_off, view, projection);
     }
 
-    // Validate the lock and re-read its matrices: 4 reads per frame
-    // (wrapper klass, m_CachedPtr, view, projection); bor divergence check
-    // every 250 ms.
+    // Validate the lock and re-read its matrices: one scatter read per tick (view and
+    // projection). The wrapper klass and its native pointer are checked every 250 ms; the
+    // bor divergence check runs on the same cadence.
     inline bool refresh_lock(const main_chain& chain, camera_candidate& candidate) {
         if (g_lock.pid != proc::pid) g_lock = {};
         if (!g_lock.managed) return false;
-        uint64_t native = 0;
-        if (!g_lock_camera_class || !managed_to_native(g_lock.managed, g_lock_camera_class, native) || native != g_lock.native ||
-            !read_matrix_pair(native, g_lock.view_off, g_lock.proj_off, candidate.view, candidate.projection)) {
-            diag::log("CAMERA", "camera lock lost managed=0x%llx native=0x%llx (wrapper/native/matrices invalid)",
+        const long long now = diag::now_ms();
+        if (now - g_lock.checked_ms >= 250) {   // wrapper klass + native pointer: 4 Hz
+            uint64_t current = 0;
+            if (!g_lock_camera_class || !managed_to_native(g_lock.managed, g_lock_camera_class, current) ||
+                current != g_lock.native) {
+                diag::log("CAMERA", "camera lock lost managed=0x%llx native=0x%llx (wrapper/native invalid)",
+                          (unsigned long long)g_lock.managed, (unsigned long long)g_lock.native);
+                g_lock = {};
+                scanner::request_rescan();
+                return false;
+            }
+            g_lock.checked_ms = now;
+        }
+        const uint64_t native = g_lock.native;
+        if (!read_matrix_pair(native, g_lock.view_off, g_lock.proj_off, candidate.view, candidate.projection)) {
+            diag::log("CAMERA", "camera lock lost managed=0x%llx native=0x%llx (matrices invalid)",
                       (unsigned long long)g_lock.managed, (unsigned long long)g_lock.native);
             g_lock = {};
             scanner::request_rescan();
@@ -380,7 +393,18 @@ namespace cam {
     // Full candidate list, best first.
     inline std::vector<camera_candidate> resolve(uint64_t local_player, main_chain& chain) {
         std::vector<camera_candidate> out;
-        chain = resolve_chain(local_player);
+        // The chain (presentation -> PlayerAnimationData -> bor) changes only with the match;
+        // resolving it costs about six reads, so it is refreshed at 4 Hz.
+        static uint64_t chain_player = 0;
+        static long long chain_ms = 0;
+        static main_chain chain_cached{};
+        const long long chain_now = diag::now_ms();
+        if (chain_player != local_player || chain_now - chain_ms >= 250) {
+            chain_cached = resolve_chain(local_player);
+            chain_player = local_player;
+            chain_ms = chain_now;
+        }
+        chain = chain_cached;
 
         camera_candidate native{};
         if (refresh_lock(chain, native)) {

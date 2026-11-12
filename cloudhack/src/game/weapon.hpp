@@ -128,6 +128,17 @@ namespace weapon {
         if (length == 0 || length > 64) return 0;
         uint64_t parts[64]{};
         if (!mem_read(array + v100::array_data, parts, size_t(length) * 8)) return 0;
+        if (g_part_class) {
+            // Class known: one scatter read for the klass words of all parts, not one per part.
+            read_req reqs[64];
+            uint64_t klass[64]{};
+            for (uint64_t i = 0; i < length; ++i)
+                reqs[i] = read_req{obj_ptr(parts[i]) ? parts[i] : 0, &klass[i], 8, false};
+            mem_read_batch(reqs, size_t(length));
+            for (uint64_t i = 0; i < length; ++i)
+                if (reqs[i].ok && klass[i] == g_part_class) return parts[i];
+            return 0;
+        }
         for (uint64_t i = 0; i < length; ++i) {
             const uint64_t part = parts[i];
             if (!obj_ptr(part)) continue;

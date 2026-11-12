@@ -227,6 +227,7 @@ static int run_overlay(const options& opts) {
 
     game::init();
     scanner::start();
+    visuals::start();   // ESP reader thread: all remote reads for the ESP happen there
 
     static float alpha = 0.f;
     static bool prev = false;
@@ -279,8 +280,7 @@ static int run_overlay(const options& opts) {
             print_status(oxorany("game closed"));
             prev = false;
             game_started = false;
-            cam::reset();
-            g_camera = 0;
+            visuals::request_reset();   // the reader drops its camera / player caches
         }
 
         if (is_landscape) {
@@ -379,6 +379,7 @@ static int run_overlay(const options& opts) {
 
     crash::stage("shutdown");
     diag::log("INFO", "shutting down (code=%d)", exit_code);
+    visuals::stop();
     scanner::stop();
     // No touch / ImGui / EGL teardown here: every caller _exit()s right after
     // this returns, which drops the overlay layer. The teardown raced the
