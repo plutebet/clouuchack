@@ -16,25 +16,11 @@ namespace menu {
     inline float scale_y = 1.f;                // panel height scale
 }
 
-namespace trigger {
-    inline bool enabled = false;          // off by default, nothing fires on launch
-    inline int lock_ms = 80;              // time checker: enemy must stay on the crosshair this long
-    inline int tap_delay_ms = 30;         // delay between the lock and the tap
-    inline int cooldown_ms = 150;         // minimum gap between two taps
-    inline int fire_x = -1, fire_y = -1;  // fire button in screen px, set from the menu (bind row)
-    inline bool bind_mode = false;        // menu: the next short tap on screen becomes the fire point
-    inline bool button_set = false;               // screen toggle button placed
-    inline float button_x = 0.f, button_y = 0.f;  // its centre, screen px
-    inline bool button_bind_mode = false;         // menu: the next short tap places the toggle button
-    inline bool fire_set() { return fire_x >= 0 && fire_y >= 0; }
-}
-
 namespace esp {
     inline bool box = true;
     inline bool name = false;
     inline bool health = true;
     inline bool weapon = true;
-    inline bool skeleton = true;
     inline int box_type = 0;
     inline float box_rounding = 0.f;
     // Interpolate enemy positions between game frames (one game frame of

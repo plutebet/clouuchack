@@ -15,7 +15,6 @@
 #include "game/game.hpp"
 #include "game/camera.hpp"
 #include "func/visuals.hpp"
-#include "func/keys.hpp"
 #include "protect/oxorany.hpp"
 #include <cstdio>
 #include <cstring>
@@ -73,7 +72,7 @@ struct heartbeat {
 static heartbeat* g_hb = nullptr;
 
 static void usage() {
-    std::printf("bycmd Standoff2 1.1.0 external ESP\n"
+    std::printf("cloudhack 1.2 external ESP\n"
                 "  --diag              probe overlay/EGL/process and exit\n"
                 "  --no-launch         do not start the game package\n"
                 "  --skip-build-check  run even if libunity build-id does not match the profile\n"
@@ -145,7 +144,7 @@ static int run_overlay(const options& opts) {
     ::signal(SIGTERM, on_signal);
     ::signal(SIGHUP, on_signal);
 
-    diag::log("INFO", "bycmd Standoff2 1.1.0 external ESP starting profile=%s build=%s pid=%d", v100::profile_name, BYCMD_BUILD_ID, int(getpid()));
+    diag::log("INFO", "cloudhack 1.2 external ESP starting profile=%s build=%s pid=%d", v100::profile_name, BYCMD_BUILD_ID, int(getpid()));
     diag::log("INFO", "device model=%s manufacturer=%s android=%s sdk=%s abi=%s pagesize=%ld uid=%d euid=%d",
               sys_prop("ro.product.model").c_str(), sys_prop("ro.product.manufacturer").c_str(),
               sys_prop("ro.build.version.release").c_str(), sys_prop("ro.build.version.sdk").c_str(),
@@ -222,7 +221,6 @@ static int run_overlay(const options& opts) {
 
     if (!touch::init(max_size, min_size, (uint8_t)displayInfo.orientation))
         diag::log("WARN", "no touch device readable in /dev/input; menu cannot be operated");
-    keys::start();
 
     print_status(oxorany("Game detect ..."));
     if (!opts.no_launch && get_pid() <= 0) launch_standoff();
@@ -260,7 +258,6 @@ static int run_overlay(const options& opts) {
         crash::stage("process");
         bool run = game::valid();
         if (run && !proc::build_checked) game::verify_build();
-        keys::apply_toggle();
         const bool esp_allowed = run && proc::lib != 0 && proc::build_ok;
 
 #if defined(__x86_64__)
@@ -307,7 +304,6 @@ static int run_overlay(const options& opts) {
             if (alpha > 0.001f) {
                 crash::stage("menu");
                 ui::menu::render();
-                ui::menu::toggle_button(alpha);
             }
 
             if (esp_allowed) {

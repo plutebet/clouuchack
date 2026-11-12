@@ -9,6 +9,5 @@
 
 namespace ui::menu {
     void render();
-    void toggle_button(float alpha);
 }
 
