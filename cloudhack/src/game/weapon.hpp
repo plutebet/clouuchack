@@ -29,16 +29,17 @@ namespace weapon {
     //
     // glyph: character of includes/fonts/esp/weapon.h, matched by silhouette
     // from a render of the font; 0 = no icon, the name is drawn instead.
-    // Not confirmed in game, matched only by elimination among the
-    // remaining glyphs: M4A1 'u', M16 'r', VAL 'z', FabM 'v', Mallard 't'.
+    // M4A1 and M16 were swapped in the first pass; checked against the real
+    // silhouettes: M4A1 'r', M16 'u'. Still not confirmed in game:
+    // VAL 'z', FabM 'v', Mallard 't'.
     inline constexpr id_name k_ids[] = {
         {0x0B, "G22", 'a'},          {0x0C, "USP", 'b'},          {0x0D, "P350", 'c'},
         {0x0F, "Deagle", 'g'},       {0x10, "Tec-9", 'e'},        {0x11, "Five-seveN", 'f'},
         {0x12, "Berettas", 'd'},     {0x20, "UMP45", 'i'},        {0x21, "Akimbo Uzi", 'l'},
         {0x22, "MP7", 'k'},          {0x23, "P90", 'm'},          {0x24, "MP5", 'j'},
-        {0x25, "MAC10", 'h'},        {0x2A, "VAL", 'z'},          {0x2B, "M4A1", 'u'},
+        {0x25, "MAC10", 'h'},        {0x2A, "VAL", 'z'},          {0x2B, "M4A1", 'r'},
         {0x2C, "AKR", 's'},          {0x2D, "AKR12", 'p'},        {0x2E, "M4", 'q'},
-        {0x2F, "M16", 'r'},          {0x30, "FAMAS", 'o'},        {0x31, "FN FAL", 'n'},
+        {0x2F, "M16", 'u'},          {0x30, "FAMAS", 'o'},        {0x31, "FN FAL", 'n'},
         {0x33, "AWM", 'C'},          {0x34, "M40", 'A'},          {0x35, "M110", 'B'},
         {0x36, "Mallard", 't'},      {0x3E, "SM1014", 'w'},       {0x3F, "FabM", 'v'},
         {0x40, "M60", 'y'},          {0x41, "SPAS", 'x'},         {0x46, "Knife", 'L'},
