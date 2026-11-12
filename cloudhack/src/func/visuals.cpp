@@ -11,6 +11,7 @@
 #include "../game/player.hpp"
 #include "../game/camera.hpp"
 #include "../game/weapon.hpp"
+#include "esp/weapon_icons.h"
 #include "../ui/theme/theme.hpp"
 #include "../ui/cfg.hpp"
 #include "../other/crash.hpp"
@@ -25,7 +26,7 @@
 #include <unistd.h>
 
 extern ImFont* espFont;
-extern ImFont* weaponFont;
+extern ImTextureID g_weapon_atlas_tex;
 
 static void esp_wait(const char* stage) {
     static long long last = 0;
@@ -550,8 +551,8 @@ void visuals::dnick(const char* name, const ImVec2& box_max, float cx, float sz,
     draw_text_outlined(dl, espFont, sz, tp, col, name);
 }
 
-// Weapon icon under the box (weapon font glyph); the name when the weapon
-// has no glyph or the icon font did not load.
+// Weapon icon under the box: the atlas icon of this weapon id (weapon_icons.h), tinted by
+// the ESP colour. The name when the weapon has no icon or the atlas did not upload.
 void visuals::dweapon(int weapon_id, float cx, float y, float box_w, float sz, float a) {
     const char* label = weapon::name(weapon_id);
     if (!label || a < 0.01f) return;
@@ -562,17 +563,23 @@ void visuals::dweapon(int weapon_id, float cx, float y, float box_w, float sz, f
         static_cast<int>(cfg::esp::box_col.z * 255),
         static_cast<int>(cfg::esp::box_col.w * 255 * a)
     );
-    const char glyph = weapon::glyph(weapon_id);
-    if (glyph && weaponFont) {
-        const char icon[2] = {glyph, 0};
-        // Height follows the distance-scaled label size; the icon is then
-        // shrunk so it never gets much wider than the box.
+    const weapon_icon_rect* icon = nullptr;
+    for (const weapon_icon_rect& r : weapon_icon_rects)
+        if (r.id == weapon_id) { icon = &r; break; }
+    if (icon && g_weapon_atlas_tex) {
+        // Height follows the distance-scaled label size; the icon is then shrunk so it
+        // never gets much wider than the box.
         float h = std::clamp(sz * 1.6f, 16.f, 34.f);
-        const ImVec2 base = weaponFont->CalcTextSizeA(h, FLT_MAX, 0.f, icon);
+        float w = h * float(icon->w) / float(icon->h);
         const float max_w = std::max(box_w * 1.2f, 36.f);
-        if (base.x > max_w && base.x > 0.f) h = std::max(10.f, h * max_w / base.x);
-        const ImVec2 ts = weaponFont->CalcTextSizeA(h, FLT_MAX, 0.f, icon);
-        draw_text_outlined(dl, weaponFont, h, ImVec2(roundf(cx - ts.x * 0.5f), roundf(y)), col, icon);
+        if (w > max_w) { h *= max_w / w; w = max_w; }
+        const ImVec2 p0(roundf(cx - w * 0.5f), roundf(y));
+        const ImVec2 p1(roundf(cx + w * 0.5f), roundf(y + h));
+        const ImVec2 uv0(float(icon->x) / float(weapon_icons_w), float(icon->y) / float(weapon_icons_h));
+        const ImVec2 uv1(float(icon->x + icon->w) / float(weapon_icons_w), float(icon->y + icon->h) / float(weapon_icons_h));
+        const ImU32 shadow = IM_COL32(0, 0, 0, int(160 * a));
+        dl->AddImage(g_weapon_atlas_tex, ImVec2(p0.x + 1.f, p0.y + 1.f), ImVec2(p1.x + 1.f, p1.y + 1.f), uv0, uv1, shadow);
+        dl->AddImage(g_weapon_atlas_tex, p0, p1, uv0, uv1, col);
         return;
     }
     if (!espFont) return;

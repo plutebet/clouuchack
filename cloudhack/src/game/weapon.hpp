@@ -27,8 +27,8 @@ namespace weapon {
     // WeaponId(byte) built from an immediate. Gameplay-only ids (mines,
     // turrets, event weapons) are kept so they are not shown as unknown.
     //
-    // glyph: character of includes/fonts/esp/weapon.h, matched by silhouette
-    // from a render of the font; 0 = no icon, the name is drawn instead.
+    // glyph: legacy character of the old icon font (removed). Icons now come
+    // from includes/fonts/esp/weapon_icons.h by id; 0 = no icon, the name is drawn.
     // M4A1 and M16 were swapped in the first pass; checked against the real
     // silhouettes: M4A1 'r', M16 'u'. Still not confirmed in game:
     // VAL 'z', FabM 'v', Mallard 't'.
