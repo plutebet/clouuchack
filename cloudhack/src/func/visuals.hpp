@@ -37,10 +37,16 @@ namespace visuals {
     box_state project_box(const Vector3& feet, const Vector3& head, const matrix& view, const matrix& projection, box_rect& out);
     void draw_target(const target& t, long long now_ms, float dt_s);
 
+    // ---- arrows for enemies outside the view -------------------------------
+    struct arrow { ImVec2 pos, dir; };   // dir: unit vector on the screen, y down
+    bool offscreen_arrow(const matrix& view, const Vector3& world, arrow& out);
+    void draw_arrow(const arrow& ar, float distance, float a);
+
     // ---- elements ------------------------------------------------------------
     void dbox(const ImVec2& t, const ImVec2& b, float a);
     void dhp(int hp, int max_hp, float trail_hp, const ImVec2& t, const ImVec2& b, float a, float number_sz);
     void dnick(const char* name, const ImVec2& box_min, float cx, float sz, float a);
-    void dweapon(int weapon_id, float cx, float y, float box_w, float sz, float a);
+    float dweapon(int weapon_id, float cx, float y, float box_w, float sz, float a);   // returns the height used
+    float ddist(float metres, float cx, float y, float sz, float a);                    // returns the height used
     void draw_text_outlined(ImDrawList* dl, ImFont* font, float size, const ImVec2& pos, ImU32 color, const char* text);
 }

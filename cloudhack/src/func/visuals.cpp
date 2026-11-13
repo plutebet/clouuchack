@@ -132,7 +132,8 @@ namespace {
 
 void visuals::draw() {
     if (!(g_sw >= 2.f) || !(g_sh >= 2.f)) return;
-    bool any = cfg::esp::box || cfg::esp::name || cfg::esp::health || cfg::esp::weapon;
+    bool any = cfg::esp::box || cfg::esp::name || cfg::esp::health || cfg::esp::weapon ||
+               cfg::esp::distance || cfg::esp::arrows;
     if (!any) { esp_wait("all ESP options disabled"); return; }
 
     crash::stage("esp-players");
@@ -398,9 +399,13 @@ void visuals::draw() {
     selected_kind_prev = selected_kind;
 
     crash::stage("esp-draw");
-    // Box geometry is visuals::project_box.
+    // Box geometry is visuals::project_box. An enemy without a box on the
+    // screen (behind the camera, or a box completely outside) becomes a
+    // candidate for a direction arrow.
     std::vector<visuals::target> targets;
     targets.reserve(frame_enemies.size());
+    struct arrow_item { visuals::arrow arrow; float distance; };
+    std::vector<arrow_item> arrow_items;
     for (const auto& Enemy : frame_enemies) {
         visuals::box_rect box{};
         const visuals::box_state state = visuals::project_box(Enemy.position, Enemy.head, ViewMatrix, ProjectionMatrix, box);
@@ -412,6 +417,9 @@ void visuals::draw() {
                 label = found != g_name_cache.end() && !found->second.name.empty() ? found->second.name.c_str() : "Enemy";
             }
             targets.push_back({box, Enemy.object, Enemy.distance, Enemy.hp, Enemy.max_hp, Enemy.weapon, label});
+        } else if (cfg::esp::arrows && (state == visuals::box_state::none || state == visuals::box_state::off_screen)) {
+            visuals::arrow ar{};
+            if (visuals::offscreen_arrow(ViewMatrix, Enemy.position, ar)) arrow_items.push_back({ar, Enemy.distance});
         }
     }
     // Far first, near last: the closest player is never covered by another box.
@@ -421,6 +429,14 @@ void visuals::draw() {
     const float dt_s = last_draw_us ? std::clamp(float(now_us - last_draw_us) * 1e-6f, 0.f, 0.1f) : 0.016f;
     last_draw_us = now_us;
     for (const visuals::target& t : targets) visuals::draw_target(t, now_ms, dt_s);
+    if (!arrow_items.empty()) {
+        // The eight nearest, the nearest drawn last.
+        std::sort(arrow_items.begin(), arrow_items.end(),
+                  [](const arrow_item& l, const arrow_item& r) { return l.distance > r.distance; });
+        const size_t first = arrow_items.size() > 8 ? arrow_items.size() - 8 : 0;
+        for (size_t i = first; i < arrow_items.size(); ++i)
+            visuals::draw_arrow(arrow_items[i].arrow, arrow_items[i].distance, distance_fade(arrow_items[i].distance));
+    }
 
     // PROBE (read-only, opt-in): while /data/local/tmp/bycmd_probe exists, dumps the szi bytes
     // (Player odq+0x88 -> szi +0x10..+0x1F) of every enemy every 100 ms. A line is logged when the
@@ -554,9 +570,9 @@ void visuals::dnick(const char* name, const ImVec2& box_min, float cx, float sz,
 
 // Weapon icon under the box: the atlas icon of this weapon id (weapon_icons.h), tinted by
 // the ESP colour. The name when the weapon has no icon or the atlas did not upload.
-void visuals::dweapon(int weapon_id, float cx, float y, float box_w, float sz, float a) {
+float visuals::dweapon(int weapon_id, float cx, float y, float box_w, float sz, float a) {
     const char* label = weapon::name(weapon_id);
-    if (!label || a < 0.01f) return;
+    if (!label || a < 0.01f) return 0.f;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const ImU32 col = rgba(cfg::esp::box_col, a);
     const weapon_icon_rect* icon = nullptr;
@@ -578,11 +594,12 @@ void visuals::dweapon(int weapon_id, float cx, float y, float box_w, float sz, f
         for (const ImVec2 d : {ImVec2(-1.f, 0.f), ImVec2(1.f, 0.f), ImVec2(0.f, -1.f), ImVec2(0.f, 1.f)})
             dl->AddImage(g_weapon_atlas_tex, ImVec2(p0.x + d.x, p0.y + d.y), ImVec2(p1.x + d.x, p1.y + d.y), uv0, uv1, halo);
         dl->AddImage(g_weapon_atlas_tex, p0, p1, uv0, uv1, col);
-        return;
+        return (p1.y - p0.y) + 2.f;
     }
-    if (!espFont) return;
+    if (!espFont) return 0.f;
     const ImVec2 ts = espFont->CalcTextSizeA(sz, FLT_MAX, 0.f, label);
     draw_text_outlined(dl, espFont, sz, ImVec2(roundf(cx - ts.x * 0.5f), roundf(y)), col, label);
+    return ts.y + 2.f;
 }
 
 // 1 px dark outline on all sides: readable on bright and dark backgrounds.
@@ -593,6 +610,17 @@ void visuals::draw_text_outlined(ImDrawList* dl, ImFont* font, float size, const
     for (const ImVec2 d : {ImVec2(-1.f, 0.f), ImVec2(1.f, 0.f), ImVec2(0.f, -1.f), ImVec2(0.f, 1.f)})
         dl->AddText(font, size, ImVec2(pos.x + d.x, pos.y + d.y), outline, text);
     dl->AddText(font, size, pos, color, text);
+}
+
+// Distance in whole metres, centred under the box (or under the weapon icon).
+float visuals::ddist(float metres, float cx, float y, float sz, float a) {
+    if (!espFont || a < 0.01f || !std::isfinite(metres)) return 0.f;
+    char txt[16];
+    std::snprintf(txt, sizeof(txt), "%dm", int(metres + 0.5f));
+    const ImVec2 ts = espFont->CalcTextSizeA(sz, FLT_MAX, 0.f, txt);
+    draw_text_outlined(ImGui::GetBackgroundDrawList(), espFont, sz, ImVec2(roundf(cx - ts.x * 0.5f), roundf(y)),
+                       IM_COL32(235, 235, 235, int(255.f * a)), txt);
+    return ts.y + 2.f;
 }
 
 // Box from the feet to just above the head: the head point is the eye pivot,
@@ -630,7 +658,7 @@ visuals::box_state visuals::project_box(const Vector3& feet, const Vector3& head
     return box_state::visible;
 }
 
-// One enemy: box, health bar, name above, weapon icon below.
+// One enemy: box, health bar, name above, weapon icon and distance below.
 void visuals::draw_target(const target& t, long long now_ms, float dt_s) {
     const box_rect& r = t.box;
     const float k = ui::style::k();
@@ -643,5 +671,54 @@ void visuals::draw_target(const target& t, long long now_ms, float dt_s) {
         dhp(t.hp, t.max_hp, trail, r.min, r.max, fade, std::clamp(text_sz * 0.85f, 11.f * k, 14.f * k));
     }
     if (cfg::esp::name && t.name) dnick(t.name, r.min, r.cx, text_sz, fade);
-    if (cfg::esp::weapon) dweapon(t.weapon, r.cx, r.max.y + 3.f, r.max.x - r.min.x, text_sz, fade);
+    float y = r.max.y + 3.f;
+    if (cfg::esp::weapon) y += dweapon(t.weapon, r.cx, y, r.max.x - r.min.x, text_sz, fade);
+    if (cfg::esp::distance) ddist(t.distance, r.cx, y, std::max(10.f * k, text_sz * 0.9f), fade);
+}
+
+// Direction of an enemy as seen from the camera, for one that has no box on
+// the screen. View space looks down -Z with +X to the right, so (x, z) of the
+// enemy is already the screen direction: ahead (z < 0) points up, right
+// points right, behind (z > 0) points down. The arrow sits on a ring around
+// the screen centre.
+bool visuals::offscreen_arrow(const matrix& view, const Vector3& world, arrow& out) {
+    const Vector4 c = matrix_multiply(view, Vector4(world.x, world.y, world.z, 1.f));
+    const float h = std::sqrt(c.x * c.x + c.z * c.z);
+    if (!std::isfinite(h) || h < 1e-3f) return false;
+    out.dir = ImVec2(c.x / h, c.z / h);
+    const float radius = 0.38f * g_sh;
+    out.pos = ImVec2(g_sw * 0.5f + out.dir.x * radius, g_sh * 0.5f + out.dir.y * radius);
+    return true;
+}
+
+// Elongated triangle pointing outwards (about twice as long as it is wide,
+// so the direction reads even when it is tiny), in the ESP colour on a dark
+// halo; nearer enemies get a bigger one (18 px up to 15 m, 10 px from 80 m on).
+void visuals::draw_arrow(const arrow& ar, float distance, float a) {
+    if (a < 0.01f) return;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    const float k = ui::style::k();
+    const float s = (10.f + 8.f * (1.f - std::clamp((distance - 15.f) / 65.f, 0.f, 1.f))) * k;
+    const ImVec2 d = ar.dir, n(-d.y, d.x);
+    const auto at = [&](float along, float side) {
+        return ImVec2(ar.pos.x + (d.x * along + n.x * side) * s, ar.pos.y + (d.y * along + n.y * side) * s);
+    };
+    const ImVec2 tip = at(1.1f, 0.f);
+    ImVec2 base_a = at(-0.8f, 0.5f), base_b = at(-0.8f, -0.5f);
+    // Filled shapes need clockwise winding (y down: positive cross product), otherwise the AA fringe goes inwards.
+    if ((base_a.x - tip.x) * (base_b.y - tip.y) - (base_a.y - tip.y) * (base_b.x - tip.x) < 0.f) std::swap(base_a, base_b);
+    const ImVec2 mid = at(-0.17f, 0.f);   // centroid
+    const auto grown = [&](const ImVec2& p) { return ImVec2(mid.x + (p.x - mid.x) * 1.3f, mid.y + (p.y - mid.y) * 1.3f); };
+    dl->AddTriangleFilled(grown(tip), grown(base_a), grown(base_b), black(0.7f * a));
+    dl->AddTriangleFilled(tip, base_a, base_b, rgba(cfg::esp::box_col, a));
+    if (cfg::esp::distance && espFont && std::isfinite(distance)) {
+        char txt[16];
+        std::snprintf(txt, sizeof(txt), "%dm", int(distance + 0.5f));
+        const float fs = 12.f * k;
+        const ImVec2 ts = espFont->CalcTextSizeA(fs, FLT_MAX, 0.f, txt);
+        // Inside the ring, along the arrow's axis, clear of the triangle and its halo.
+        const float inset = s * 1.f + 4.f * k + (std::fabs(d.x) * ts.x + std::fabs(d.y) * ts.y) * 0.5f;
+        draw_text_outlined(dl, espFont, fs, ImVec2(roundf(ar.pos.x - d.x * inset - ts.x * 0.5f), roundf(ar.pos.y - d.y * inset - ts.y * 0.5f)),
+                           IM_COL32(235, 235, 235, int(255.f * a)), txt);
+    }
 }

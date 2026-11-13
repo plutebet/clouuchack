@@ -1,6 +1,6 @@
 // ================================================================================
 // cloudhack menu: a compact panel anchored under the watermark.
-//   Box / Corner / Name / Health / Weapon - toggle switches
+//   Box / Corner / Name / Health / Weapon / Distance / Arrows - toggle switches
 //   Color                                   - one ESP colour (box, health bar)
 //   unload                                  - clean shutdown through status::g_quit_request
 // Panel: tap a control = release without moving; press + move = drag the panel.
@@ -48,7 +48,7 @@ namespace ui::menu {
         ImVec2 g_grip_min, g_grip_max;         // resize grip of this frame; taps starting there are ignored
 
         // Toggle rows of the panel (see render()); the panel height follows from it.
-        constexpr int kToggleRows = 5;
+        constexpr int kToggleRows = 7;
         // Panel size in px. Base width 330 px; height 50 px + the rows (toggles, colour row, button) times scale_y.
         float panel_w(float sx, float k) { return ImMin(330.f * k * sx, g_sw - 16.f * k); }
         float panel_h(float sy, float k) { return 50.f * k + (64.f * kToggleRows + 72.f + 64.f) * k * sy; }
@@ -353,6 +353,8 @@ namespace ui::menu {
             {"Name", &cfg::esp::name},
             {"Health", &cfg::esp::health},
             {"Weapon", &cfg::esp::weapon},
+            {"Distance", &cfg::esp::distance},
+            {"Arrows", &cfg::esp::arrows},
         };
         static_assert(sizeof(items) / sizeof(items[0]) == kToggleRows, "kToggleRows must match the toggle rows");
         for (const item& it : items) {

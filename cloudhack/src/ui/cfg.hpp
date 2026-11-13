@@ -21,7 +21,10 @@ namespace esp {
     inline bool name = false;
     inline bool health = true;
     inline bool weapon = true;
-    // Off until switched on in the menu: the corner box is a different look.
+    // The three below add elements the ESP did not draw before, so they stay
+    // off until they are switched on in the menu.
+    inline bool distance = false;   // "23m" under the box / next to an arrow
+    inline bool arrows = false;     // direction arrows for enemies outside the view
     inline bool corner = false;     // corner-style box instead of the full outline
     inline float box_rounding = 0.f;
     // Interpolate enemy positions between game frames (one game frame of
