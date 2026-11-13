@@ -254,6 +254,14 @@ namespace cam {
 
     inline uint64_t g_lock_camera_class = 0;
     inline long long g_last_bor_check = 0;
+    // After a match change the locked camera may belong to the old scene:
+    // for a few seconds it is checked against the new MainCamera state every
+    // frame and dropped on the first mismatch instead of after 2 s.
+    inline long long g_strict_until_ms = 0;
+    inline void on_new_match() {
+        g_strict_until_ms = diag::now_ms() + 3000;
+        g_last_probe = 0;
+    }
 
     // Re-read the locked matrices only (2 reads). Used by the straddle check
     // in visuals: if the camera advanced while player poses were being read,
@@ -278,13 +286,14 @@ namespace cam {
             scanner::request_rescan();
             return false;
         }
-        if (diag::every(g_last_bor_check, 250)) {
+        const bool strict = diag::now_ms() < g_strict_until_ms;
+        if (strict || diag::every(g_last_bor_check, 250)) {
             const bor_pose pose = read_bor(chain.main_bor);
             if (pose.valid) {
                 const float d = distance(position_from_view(candidate.view), pose.position);
                 if (d > 3.0f) {
                     // ~90 frames at 250 ms checks == 22 s was too slow; 8 checks == 2 s.
-                    if (++g_lock.mismatch_frames > 8) {
+                    if (++g_lock.mismatch_frames > (strict ? 0 : 8)) {
                         diag::log("CAMERA", "camera lock dropped: native camera %.1f m away from MainCamera bor for %d checks",
                                   d, g_lock.mismatch_frames);
                         g_lock = {};

@@ -445,6 +445,10 @@ namespace scanner {
         int pid{-1};
         uint64_t lib{0};
         uint64_t registry{0};
+        // Every NetObject registry seen in the heap. Between matches the old
+        // one stays alive and still validates, so the render thread picks the
+        // one that holds the local player instead of trusting the first hit.
+        std::vector<uint64_t> registries;
         std::vector<uint64_t> controllers; // kmc / wot instances
         std::vector<uint64_t> animation;   // PlayerAnimationData instances
         std::vector<uint64_t> cameras;     // UnityEngine.Camera managed wrappers
@@ -462,6 +466,11 @@ namespace scanner {
     // the scanner only re-passes when the registry is missing: a full pass
     // reads ~4 GiB on this game and must not run every 15 s for nothing.
     inline std::atomic<bool> g_want_more{true};
+    // Bumped by the render thread when the local player changes (new match,
+    // new round object). Resets the pass back-off and restarts a running pass
+    // so the new match's camera and registry are found from the start.
+    inline std::atomic<unsigned> g_match_epoch{0};
+    inline void notify_new_match() { g_match_epoch.fetch_add(1); }
     inline std::thread g_thread;
 
     // Mappings that can never hold il2cpp objects. Names come from
@@ -532,13 +541,23 @@ namespace scanner {
                 validate_registry(g_results.registry, registry_class, store_class))
                 local.registry = g_results.registry;
         }
+        const unsigned epoch = g_match_epoch.load();
+        // Found objects go out as soon as they are seen: the camera resolver
+        // probes the published list every 250 ms, so a match does not wait
+        // for the end of a multi-GiB pass.
+        auto publish = [&](std::vector<uint64_t> results::*list, uint64_t object, size_t cap) {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            if (g_results.pid != pid || g_results.lib != lib) return;
+            std::vector<uint64_t>& v = g_results.*list;
+            if (v.size() < cap && std::find(v.begin(), v.end(), object) == v.end()) v.push_back(object);
+        };
         const long long started = diag::now_ms();
         uint64_t scanned = 0;
         std::vector<uint64_t> words;
         for (const remote_map& map : maps) {
             uint64_t cursor = map.begin;
             while (cursor < map.end) {
-                if (!g_run || proc::pid != pid) return;
+                if (!g_run || proc::pid != pid || g_match_epoch.load() != epoch) return;
                 size_t bytes = size_t(std::min<uint64_t>(map.end - cursor, 1024 * 1024));
                 bytes &= ~size_t(7);
                 if (bytes < 16) break;
@@ -549,22 +568,26 @@ namespace scanner {
                         if (word < 0x10000) continue;
                         const uint64_t object = cursor + i * 8;
                         if (word == registry_class) {
-                            if (!local.registry && validate_registry(object, registry_class, store_class)) {
-                                local.registry = object;
+                            if (local.registries.size() < 8 && validate_registry(object, registry_class, store_class)) {
+                                local.registries.push_back(object);
+                                publish(&results::registries, object, 8);
+                                if (!local.registry) local.registry = object;
                                 std::lock_guard<std::mutex> lock(g_mutex);
                                 g_results.pid = pid;
                                 g_results.lib = lib;
-                                g_results.registry = object;
-                                diag::log("SCAN", "NetObject registry found at 0x%llx after %.1f MiB",
+                                if (!g_results.registry) g_results.registry = object;
+                                diag::log("SCAN", "NetObject registry candidate 0x%llx after %.1f MiB",
                                           (unsigned long long)object, double(scanned) / 1048576.0);
                             }
                         } else if ((word == kmc_class && kmc_class) || (word == wot_class && wot_class)) {
-                            if (local.controllers.size() < 32) local.controllers.push_back(object);
+                            if (local.controllers.size() < 32) { local.controllers.push_back(object); publish(&results::controllers, object, 32); }
                         } else if (word == animation_class && animation_class) {
-                            if (local.animation.size() < 32) local.animation.push_back(object);
+                            if (local.animation.size() < 32) { local.animation.push_back(object); publish(&results::animation, object, 32); }
                         } else if (word == camera_class && camera_class) {
-                            if (local.cameras.size() < 128 && obj_ptr(rpm<uint64_t>(object + v100::unity_cached_ptr)))
+                            if (local.cameras.size() < 128 && obj_ptr(rpm<uint64_t>(object + v100::unity_cached_ptr))) {
                                 local.cameras.push_back(object);
+                                publish(&results::cameras, object, 128);
+                            }
                         }
                     }
                 }
@@ -593,7 +616,15 @@ namespace scanner {
         // Background priority: the scan must never steal a core from the game.
         ::setpriority(PRIO_PROCESS, static_cast<id_t>(::syscall(SYS_gettid)), 19);
         unsigned idle_passes = 0; // passes that found nothing new while the registry is known
+        unsigned seen_epoch = g_match_epoch.load();
         while (g_run) {
+            const unsigned epoch = g_match_epoch.load();
+            const bool new_match = epoch != seen_epoch;
+            if (new_match) {
+                seen_epoch = epoch;
+                idle_passes = 0;
+                diag::log("SCAN", "new match (local player changed): back-off reset");
+            }
             const int pid = proc::pid;
             const uint64_t lib = proc::lib;
             if (pid <= 0 || lib == 0 || !proc::build_ok) {
@@ -625,11 +656,11 @@ namespace scanner {
             // every 15 s while the player is in a round.
             const bool registry_known = !essential_missing || g_results.registry != 0;
             long long interval = 15000;
-            if (registry_known && idle_passes > 0) interval = std::min<long long>(120000, 15000LL << std::min<unsigned>(idle_passes, 3));
-            // A requested rescan (camera lock lost, registry gone) reads the
-            // whole GC heap; at most one every 20 s, the periodic pass below
-            // still covers discovery.
-            const bool due = (g_rescan && (last_pass == 0 || since_pass > 20000)) ||
+            if (registry_known && idle_passes > 0) interval = std::min<long long>(30000, 15000LL << std::min<unsigned>(idle_passes, 1));
+            // A new match with no camera lock scans at once; a requested
+            // rescan (lock lost, registry gone) waits 3 s after the last pass.
+            const bool due = (new_match && (essential_missing || g_want_more)) ||
+                             (g_rescan && since_pass > 3000) ||
                              ((essential_missing || g_want_more) && since_pass > interval);
             if (!due) {
                 sleep_ms(100);
@@ -645,7 +676,8 @@ namespace scanner {
                 std::lock_guard<std::mutex> lock(g_mutex);
                 if (g_results.registry && wanted_more) ++idle_passes; else idle_passes = 0;
             }
-            sleep_ms(3000);
+            // Short rest, cut short by a new match.
+            for (int i = 0; i < 30 && g_run && g_match_epoch.load() == seen_epoch; ++i) sleep_ms(100);
         }
     }
 
@@ -768,27 +800,19 @@ inline int resolve_local_flag(const std::vector<player_snapshot>& objects) {
     return g_local_flag_offset;
 }
 
-inline std::vector<player_snapshot> players() {
-    std::vector<player_snapshot> out;
-    if (!registry_ready()) return out;
-    const uint64_t player_class = typeinfo(v100::player_typeinfo);
-    uint64_t store = rpm<uint64_t>(g_registry + v100::registry_store);
-    uint64_t list = rpm<uint64_t>(store + v100::store_objects);
-    int count = rpm<int>(list + v100::list_count);
-    uint64_t array = rpm<uint64_t>(list + v100::list_items);
-    if (!player_class || count < 0 || count > 4096 || !array) {
-        diag::log("WARN", "registry became invalid playerClass=0x%llx count=%d array=0x%llx",
-                  (unsigned long long)player_class, count, (unsigned long long)array);
-        g_registry = 0;
-        scanner::request_rescan();
-        return out;
-    }
-    const long long now = diag::now_ms();
-    size_t raw_exact = 0;
-    uint64_t active_world = 0;
-    std::vector<player_snapshot> current;
+// Decodes every player NetObject of one registry. False when the registry
+// structure itself is unreadable.
+inline bool read_registry_players(uint64_t registry, uint64_t player_class, std::vector<player_snapshot>& current, int& count) {
+    current.clear();
+    count = 0;
+    const uint64_t store = rpm<uint64_t>(registry + v100::registry_store);
+    const uint64_t list = rpm<uint64_t>(store + v100::store_objects);
+    count = rpm<int>(list + v100::list_count);
+    const uint64_t array = rpm<uint64_t>(list + v100::list_items);
+    if (!player_class || count < 0 || count > 4096 || (count > 0 && !array)) return false;
+    if (count == 0) return true;
     std::vector<uint64_t> items(size_t(count), 0);
-    if (count > 0 && !mem_read(array + v100::array_data, items.data(), items.size() * 8)) return out;
+    if (!mem_read(array + v100::array_data, items.data(), items.size() * 8)) return false;
     // Player blocks are fetched in scatter batches and decoded locally; an
     // unreadable object only drops itself (per-part retry in the scatter).
     constexpr size_t kBlock = 0x98;
@@ -809,12 +833,84 @@ inline std::vector<player_snapshot> players() {
     }
     for (int i = 0; i < count; ++i) {
         player_snapshot snap{};
-        if (!fetched[size_t(i)] ||
-            !decode_player_snapshot(items[size_t(i)], blocks.data() + size_t(i) * kBlock, player_class, snap)) continue;
-        ++raw_exact;
+        if (fetched[size_t(i)] &&
+            decode_player_snapshot(items[size_t(i)], blocks.data() + size_t(i) * kBlock, player_class, snap))
+            current.push_back(snap);
+    }
+    return true;
+}
+
+// A live match has exactly one local NetObject on one of the three flags.
+inline bool has_local_player(const std::vector<player_snapshot>& objects) {
+    for (int slot = 0; slot < 3; ++slot) {
+        int n = 0;
+        for (const player_snapshot& p : objects) if (p.flags[slot]) ++n;
+        if (n == 1) return true;
+    }
+    return false;
+}
+
+// The registry in use holds no local player (old match kept alive, next
+// match started without going through the menu): switch to a registry the
+// scanner found that does hold one, or ask for a pass to find it.
+inline void switch_to_live_registry(uint64_t player_class) {
+    static long long last_try = 0, last_request = 0;
+    if (!diag::every(last_try, 1000)) return;
+    const scanner::results snap = scanner::snapshot();
+    if (snap.pid == proc::pid && snap.lib == proc::lib) {
+        const uint64_t registry_class = typeinfo(v100::registry_typeinfo);
+        const uint64_t store_class = typeinfo(v100::store_typeinfo);
+        for (uint64_t candidate : snap.registries) {
+            if (candidate == g_registry || !validate_registry(candidate, registry_class, store_class)) continue;
+            std::vector<player_snapshot> objects;
+            int count = 0;
+            if (!read_registry_players(candidate, player_class, objects, count) || !has_local_player(objects)) continue;
+            diag::log("INFO", "registry 0x%llx has no local player, switching to 0x%llx (%zu players)",
+                      (unsigned long long)g_registry, (unsigned long long)candidate, objects.size());
+            g_registry = candidate;
+            g_player_cache.clear();
+            return;
+        }
+    }
+    if (diag::every(last_request, 15000)) {
+        diag::log("INFO", "registry 0x%llx has no local player and no other candidate holds one: rescan",
+                  (unsigned long long)g_registry);
+        scanner::request_rescan();
+    }
+}
+
+inline std::vector<player_snapshot> players() {
+    std::vector<player_snapshot> out;
+    if (!registry_ready()) return out;
+    const uint64_t player_class = typeinfo(v100::player_typeinfo);
+    std::vector<player_snapshot> current;
+    int count = 0;
+    if (!read_registry_players(g_registry, player_class, current, count)) {
+        diag::log("WARN", "registry became invalid playerClass=0x%llx count=%d",
+                  (unsigned long long)player_class, count);
+        g_registry = 0;
+        scanner::request_rescan();
+        return out;
+    }
+    static long long no_local_since = 0;
+    const long long now = diag::now_ms();
+    if (has_local_player(current)) {
+        no_local_since = 0;
+    } else {
+        if (!no_local_since) no_local_since = now;
+        if (now - no_local_since > 1000) {
+            const uint64_t before = g_registry;
+            switch_to_live_registry(player_class);
+            if (g_registry != before && read_registry_players(g_registry, player_class, current, count) &&
+                has_local_player(current))
+                no_local_since = 0;
+        }
+    }
+    const size_t raw_exact = current.size();
+    uint64_t active_world = 0;
+    for (const player_snapshot& snap : current) {
         if (!active_world || snap.is_local()) active_world = snap.world;
         cache_player(snap.object, snap.id, now);
-        current.push_back(snap);
     }
     // Cache validation costs three reads per entry; once every 500 ms is enough.
     static long long last_cache_check = 0;
@@ -826,8 +922,9 @@ inline std::vector<player_snapshot> players() {
                        (active_world && rpm<uint64_t>(entry.object + v100::player_world) != active_world);
             }), g_player_cache.end());
     }
+    constexpr size_t kMaxPlayers = 32;
     for (const player_snapshot& snap : current) {
-        if (out.size() >= 10) break;
+        if (out.size() >= kMaxPlayers) break;
         out.push_back(snap);
     }
     // A dead player disappears from the registry but can remain in the cache
@@ -835,7 +932,7 @@ inline std::vector<player_snapshot> players() {
     // the registry has a real match snapshot, do not resurrect cache-only objects.
     if (current.size() < 2) {
         for (const auto& entry : g_player_cache) {
-            if (out.size() >= 10) break;
+            if (out.size() >= kMaxPlayers) break;
             bool present = false;
             for (const player_snapshot& snap : out) if (snap.object == entry.object) { present = true; break; }
             if (present) continue;
@@ -913,27 +1010,96 @@ inline bool noisy_player_name(const std::string& value) {
     return hex || short_lower || repeated;
 }
 
-// Heuristic name lookup: no field in dump.cs 1.1.0 is confirmed to hold the
-// nickname, so this walks the player's component fields for a managed string
-// that looks like a nickname. Treat the result as best-effort.
-inline std::string player_name(uint64_t player) {
-    const uint64_t known_string = rpm<uint64_t>(proc::lib + v100::player_string_literal);
-    const uint64_t string_class = plausible(known_string) ? rpm<uint64_t>(known_string) : 0;
+// System.String klass. There is no String TypeInfo slot in this build and a
+// single literal slot stays null until the game touches that literal, so the
+// klass is taken from the string-literal table: the klass word shared by at
+// least three initialised literals.
+inline uint64_t string_klass() {
+    static uint64_t cached = 0;
+    static int cached_pid = -1;
+    static long long last_try = 0;
+    if (cached && cached_pid == proc::pid) return cached;
+    if (!diag::every(last_try, 1000)) return 0;
+    uint64_t slots[512]{};
+    if (!mem_read(proc::lib + v100::player_string_literal, slots, sizeof(slots))) return 0;
+    std::unordered_map<uint64_t, int> votes;
+    for (uint64_t slot : slots) {
+        if (!obj_ptr(slot)) continue;
+        const uint64_t klass = rpm<uint64_t>(slot);
+        if (!obj_ptr(klass)) continue;
+        if (++votes[klass] >= 3) {
+            cached = klass;
+            cached_pid = proc::pid;
+            diag::log("NAME", "string klass 0x%llx (literal table)", (unsigned long long)klass);
+            return cached;
+        }
+    }
+    return 0;
+}
+
+inline bool printable_name(const std::string& value) {
+    return !value.empty() && value.size() <= 96 && value.find('<') == std::string::npos &&
+           value.find("http") == std::string::npos;
+}
+
+// Where the nickname lives: component class + field offset. Found by the
+// heuristic below and locked once two different players agree on the place
+// with two different names; after that every name is read from there
+// directly, so it no longer depends on what else the components hold.
+struct name_location { uint64_t klass{0}; uint32_t offset{0}; };
+inline name_location g_name_location;
+inline int g_name_location_pid = -1;
+struct name_vote { uint64_t klass; uint32_t offset; uint32_t player_id; std::string value; };
+inline std::vector<name_vote> g_name_votes;
+
+inline void vote_name_location(uint64_t klass, uint32_t offset, uint32_t player_id, const std::string& value) {
+    for (const name_vote& v : g_name_votes) {
+        if (v.klass != klass || v.offset != offset || v.player_id == player_id || v.value == value) continue;
+        g_name_location = {klass, offset};
+        g_name_votes.clear();
+        diag::log("NAME", "nickname field locked: component klass=0x%llx +0x%x ('%s', '%s')",
+                  (unsigned long long)klass, offset, v.value.c_str(), value.c_str());
+        return;
+    }
+    for (const name_vote& v : g_name_votes)
+        if (v.klass == klass && v.offset == offset && v.player_id == player_id) return;
+    if (g_name_votes.size() >= 64) g_name_votes.erase(g_name_votes.begin());
+    g_name_votes.push_back({klass, offset, player_id, value});
+}
+
+inline std::string player_name(uint64_t player, uint32_t player_id) {
+    if (g_name_location_pid != proc::pid) {
+        g_name_location = {};
+        g_name_votes.clear();
+        g_name_location_pid = proc::pid;
+    }
+    const uint64_t string_class = string_klass();
     const uint64_t container = rpm<uint64_t>(player + v100::player_components);
     if (!string_class || !plausible(container)) return {};
-    for (uint64_t field = 0x10; field <= 0x38; field += 8) {
-        const uint64_t array = rpm<uint64_t>(container + field);
+    uint64_t arrays[6]{};
+    if (!mem_read(container + 0x10, arrays, sizeof(arrays))) return {};
+    for (uint64_t array : arrays) {
+        if (!plausible(array)) continue;
         const uint64_t count = rpm<uint64_t>(array + v100::array_length);
-        if (!plausible(array) || count > 256) continue;
-        for (uint64_t i = 0; i < count; ++i) {
-            const uint64_t component = rpm<uint64_t>(array + v100::array_data + i * 8);
+        if (count == 0 || count > 256) continue;
+        std::vector<uint64_t> components(static_cast<size_t>(count));
+        if (!mem_read(array + v100::array_data, components.data(), components.size() * 8)) continue;
+        for (uint64_t component : components) {
             if (!plausible(component)) continue;
-            uint64_t fields[30]{};
-            if (!mem_read(component + 0x10, fields, sizeof(fields))) continue;
-            for (uint64_t value : fields) {
-                if (!obj_ptr(value)) continue;
-                std::string candidate = read_managed_string(value, string_class);
+            uint64_t words[32]{};   // klass, monitor, then 30 field words from +0x10
+            if (!mem_read(component, words, sizeof(words))) continue;
+            const uint64_t klass = words[0];
+            if (g_name_location.klass) {
+                if (klass != g_name_location.klass) continue;
+                const uint64_t value = rpm<uint64_t>(component + g_name_location.offset);
+                std::string name = obj_ptr(value) ? read_managed_string(value, string_class) : std::string();
+                return printable_name(name) ? name : std::string();
+            }
+            for (int i = 2; i < 32; ++i) {
+                if (!obj_ptr(words[i])) continue;
+                std::string candidate = read_managed_string(words[i], string_class);
                 if (candidate.empty() || candidate.size() > 96 || noisy_player_name(candidate)) continue;
+                vote_name_location(klass, uint32_t(i * 8), player_id, candidate);
                 return candidate;
             }
         }

@@ -22,6 +22,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <array>
+#include <cfloat>
+#include <cstdio>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -125,15 +127,27 @@ void visuals::draw() {
         purge_missing(weapon::g_players, live);
     }
 
-    // Resolve at most one name per 100 ms. Name discovery touches several
-    // component objects (dozens of reads); it has no business in a 120 Hz loop.
+    // Resolve at most one name per 100 ms (dozens of reads each). Players
+    // without a name come first; a failed re-read never replaces a name that
+    // was already found for the same player.
     if (cfg::esp::name && now_us - g_last_name_us > 100000) {
         g_last_name_us = now_us;
-        const player_snapshot& p = Players[g_name_cursor++ % Players.size()];
-        name_cache_entry& entry = g_name_cache[p.object];
-        if (entry.id != p.id || now_ms - entry.refreshed > 5000) {
-            entry.id = p.id;
-            entry.name = player_name(p.object);
+        const size_t n = Players.size();
+        const player_snapshot* pick = nullptr;
+        for (size_t k = 0; k < n && !pick; ++k) {
+            const player_snapshot& p = Players[(g_name_cursor + k) % n];
+            const auto it = g_name_cache.find(p.object);
+            if (it == g_name_cache.end() || it->second.id != p.id || it->second.name.empty()) {
+                pick = &p;
+                g_name_cursor += k + 1;
+            }
+        }
+        if (!pick) pick = &Players[g_name_cursor++ % n];
+        name_cache_entry& entry = g_name_cache[pick->object];
+        if (entry.id != pick->id || entry.name.empty() || now_ms - entry.refreshed > 5000) {
+            std::string name = player_name(pick->object, pick->id);
+            if (!name.empty() || entry.id != pick->id) entry.name = std::move(name);
+            entry.id = pick->id;
             entry.refreshed = now_ms;
         }
     }
@@ -142,6 +156,23 @@ void visuals::draw() {
     for (const player_snapshot& p : Players) if (p.is_local()) { Local = &p; break; }
     if (!Local) { esp_wait("local player flag"); return; }
     const uint64_t LocalPlayer = Local->object;
+    // A new local NetObject means a new match or round object: the scanner
+    // drops its back-off and restarts, the camera lock is re-checked at once,
+    // and per-enemy state of the old match is discarded.
+    {
+        static uint64_t last_local = 0;
+        if (LocalPlayer != last_local) {
+            if (last_local) {
+                diag::log("INFO", "local player changed 0x%llx -> 0x%llx: new match",
+                          (unsigned long long)last_local, (unsigned long long)LocalPlayer);
+                scanner::notify_new_match();
+                cam::on_new_match();
+                g_dead_since.clear();
+                g_motion.clear();
+            }
+            last_local = LocalPlayer;
+        }
+    }
     const int LocalTeam = Local->team;
     if (LocalTeam != 1 && LocalTeam != 2) { esp_wait("local team validation"); return; }
     const player::PlayerPose LocalPose = player::pose(*Local);
@@ -337,40 +368,43 @@ void visuals::draw() {
     selected_kind_prev = selected_kind;
 
     crash::stage("esp-draw");
+    // Box from the feet to just above the head: the head point is the eye
+    // pivot, so 15 cm are added to keep the top edge off the forehead.
+    struct draw_item { ImVec2 min, max; float cx; const enemy_frame* e; };
+    std::vector<draw_item> items;
+    items.reserve(frame_enemies.size());
     for (const auto& Enemy : frame_enemies) {
-        ImVec2 ScreenHead, ScreenFoot;
-        const bool HeadVisible = world_to_screen(Enemy.head, ViewMatrix, ProjectionMatrix, ScreenHead);
-        const bool FootVisible = world_to_screen(Enemy.position, ViewMatrix, ProjectionMatrix, ScreenFoot);
-        if (!HeadVisible || !FootVisible) continue;
+        ImVec2 top, foot;
+        if (!world_to_screen(Enemy.head + Vector3(0.f, 0.15f, 0.f), ViewMatrix, ProjectionMatrix, top) ||
+            !world_to_screen(Enemy.position, ViewMatrix, ProjectionMatrix, foot)) continue;
         ++projected;
-
-        float x1 = roundf(ScreenHead.x);
-        float y1 = roundf(fminf(ScreenHead.y, ScreenFoot.y));
-        float x2 = roundf(ScreenFoot.x);
-        float y2 = roundf(fmaxf(ScreenHead.y, ScreenFoot.y));
-
-        float bh = fabsf(y2 - y1);
-        float bw = roundf(bh * 0.21f); // total width ~0.42 * height
-        float cx = roundf((x1 + x2) * 0.5f);
-
-        ImVec2 BoxMin(cx - bw, y1);
-        ImVec2 BoxMax(cx + bw, y2);
-
-        float inv_dist = 1.f / (Enemy.distance + 0.1f);
-        float font_sz = std::clamp(400.f * inv_dist, 10.f, 18.f);
-
-        if (cfg::esp::box) dbox(BoxMin, BoxMax, 1.f);
-        if (cfg::esp::health) dhp(Enemy.hp, Enemy.max_hp, BoxMin, BoxMax, bh, 1.f);
+        float y1 = std::min(top.y, foot.y), y2 = std::max(top.y, foot.y);
+        if (!(y2 - y1 >= 1.f) || y2 - y1 > g_sh * 3.f) continue;
+        if (y2 - y1 < 10.f) { const float mid = (y1 + y2) * 0.5f; y1 = mid - 5.f; y2 = mid + 5.f; }
+        const float half_w = std::max(3.f, (y2 - y1) * 0.21f);
+        const float cx = roundf((top.x + foot.x) * 0.5f);
+        const ImVec2 mn(roundf(cx - half_w), roundf(y1)), mx(roundf(cx + half_w), roundf(y2));
+        if (mx.x < -64.f || mn.x > g_sw + 64.f || mx.y < -64.f || mn.y > g_sh + 64.f) continue;
+        items.push_back({mn, mx, cx, &Enemy});
+    }
+    // Far first, near last: the closest player is never covered by another box.
+    std::sort(items.begin(), items.end(),
+              [](const draw_item& l, const draw_item& r) { return l.e->distance > r.e->distance; });
+    for (const draw_item& it : items) {
+        const enemy_frame& Enemy = *it.e;
+        const float box_h = it.max.y - it.min.y;
+        // Distant players fade a little so the close ones stand out.
+        const float fade = 1.f - 0.4f * std::clamp((Enemy.distance - 40.f) / 110.f, 0.f, 1.f);
+        const float text_sz = std::clamp(box_h * 0.11f, 11.f, 16.f);
+        if (cfg::esp::box) dbox(it.min, it.max, fade);
+        if (cfg::esp::health) dhp(Enemy.hp, Enemy.max_hp, it.min, it.max, fade);
         if (cfg::esp::name) {
             const auto found = g_name_cache.find(Enemy.object);
             const char* label = found != g_name_cache.end() && !found->second.name.empty()
                 ? found->second.name.c_str() : "Enemy";
-            dnick(label, BoxMax, cx, font_sz, 1.f);
+            dnick(label, it.min, it.cx, text_sz, fade);
         }
-        if (cfg::esp::weapon) {
-            const float y = BoxMax.y + 4.f + (cfg::esp::name && espFont ? font_sz + 2.f : 0.f);
-            dweapon(Enemy.weapon, cx, y, BoxMax.x - BoxMin.x, font_sz, 1.f);
-        }
+        if (cfg::esp::weapon) dweapon(Enemy.weapon, it.cx, it.max.y + 3.f, it.max.x - it.min.x, text_sz, fade);
     }
 
     // PROBE (read-only, opt-in): while /data/local/tmp/bycmd_probe exists, dumps the szi bytes
@@ -410,145 +444,91 @@ void visuals::draw() {
     }
 }
 
+namespace {
+    ImU32 rgba(const ImVec4& c, float a) {
+        return IM_COL32(int(c.x * 255.f), int(c.y * 255.f), int(c.z * 255.f), int(std::clamp(c.w * a, 0.f, 1.f) * 255.f));
+    }
+    ImU32 black(float a) { return IM_COL32(0, 0, 0, int(std::clamp(a, 0.f, 1.f) * 255.f)); }
+
+    // Red (empty) -> yellow (half) -> green (full).
+    ImU32 health_color(float pct, float a) {
+        pct = std::clamp(pct, 0.f, 1.f);
+        const ImVec4 red(0.93f, 0.25f, 0.25f, 1.f), yellow(1.f, 0.82f, 0.25f, 1.f), green(0.35f, 0.88f, 0.42f, 1.f);
+        const float t = pct < 0.5f ? pct * 2.f : (pct - 0.5f) * 2.f;
+        const ImVec4& lo = pct < 0.5f ? red : yellow;
+        const ImVec4& hi = pct < 0.5f ? yellow : green;
+        return rgba(ImVec4(lo.x + (hi.x - lo.x) * t, lo.y + (hi.y - lo.y) * t, lo.z + (hi.z - lo.z) * t, 1.f), a);
+    }
+
+    // Pixel-exact horizontal / vertical line with a 1 px dark border.
+    void hline(ImDrawList* dl, float x0, float x1, float y, ImU32 col, ImU32 border) {
+        dl->AddRectFilled(ImVec2(x0 - 1.f, y - 1.f), ImVec2(x1 + 1.f, y + 2.f), border);
+        dl->AddRectFilled(ImVec2(x0, y), ImVec2(x1, y + 1.f), col);
+    }
+    void vline(ImDrawList* dl, float x, float y0, float y1, ImU32 col, ImU32 border) {
+        dl->AddRectFilled(ImVec2(x - 1.f, y0 - 1.f), ImVec2(x + 2.f, y1 + 1.f), border);
+        dl->AddRectFilled(ImVec2(x, y0), ImVec2(x + 1.f, y1), col);
+    }
+}
+
 void visuals::dbox(const ImVec2& t, const ImVec2& b, float a) {
     if (a < 0.01f) return;
-
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    const float x1 = t.x, y1 = t.y, x2 = b.x, y2 = b.y;
+    const ImU32 col = rgba(cfg::esp::box_col, a);
+    const ImU32 border = black(0.78f * a);
 
-    float x1 = t.x, y1 = t.y, x2 = b.x, y2 = b.y;
-    float r = cfg::esp::box_rounding;
-
-    ImU32 col = IM_COL32(
-        static_cast<int>(cfg::esp::box_col.x * 255),
-        static_cast<int>(cfg::esp::box_col.y * 255),
-        static_cast<int>(cfg::esp::box_col.z * 255),
-        static_cast<int>(cfg::esp::box_col.w * 255 * a)
-    );
+    // Soft inner shade: transparent at the head, darker at the feet.
+    if (x2 - x1 > 4.f && y2 - y1 > 4.f)
+        dl->AddRectFilledMultiColor(ImVec2(x1 + 1.f, y1 + 1.f), ImVec2(x2, y2),
+                                    black(0.02f * a), black(0.02f * a), black(0.14f * a), black(0.14f * a));
 
     if (cfg::esp::box_type == 0) {
-        dl->AddRect(ImVec2(x1 + 2.f, y1 + 2.f), ImVec2(x2 + 2.f, y2 + 2.f), IM_COL32(0, 0, 0, (int)(100 * a)), r, 0, 2.f);
-        dl->AddRect(ImVec2(x1 - 1.f, y1 - 1.f), ImVec2(x2 + 1.f, y2 + 1.f), IM_COL32(0, 0, 0, (int)(180 * a)), r, 0, 1.f);
-        dl->AddRect(ImVec2(x1, y1), ImVec2(x2, y2), col, r, 0, 1.f);
-    } else {
-        float w = x2 - x1, h = y2 - y1;
-        float sz = std::min(w, h) * 0.25f;
-        float cr = std::min(r, sz * 0.5f);
-
-        ImU32 s1 = IM_COL32(0, 0, 0, (int)(100 * a));
-        ImU32 s2 = IM_COL32(0, 0, 0, (int)(180 * a));
-
-        auto corner = [&](float cx, float cy, float dx, float dy) {
-            if (cr > 0.5f) {
-                float arc_cx = cx + dx * cr;
-                float arc_cy = cy + dy * cr;
-
-                float angle_start, angle_end;
-                if (dx > 0 && dy > 0) { angle_start = 3.14159265f; angle_end = 4.71238898f; }
-                else if (dx < 0 && dy > 0) { angle_start = 4.71238898f; angle_end = 6.28318530f; }
-                else if (dx > 0 && dy < 0) { angle_start = 1.57079632f; angle_end = 3.14159265f; }
-                else { angle_start = 0.f; angle_end = 1.57079632f; }
-
-                dl->PathArcTo(ImVec2(arc_cx + 2.f * (dx > 0 ? 1 : -1), arc_cy + 2.f * (dy > 0 ? 1 : -1)), cr, angle_start, angle_end, 8);
-                dl->PathStroke(s1, 0, 2.f);
-                dl->AddLine(ImVec2(cx + dx * cr, cy + 2.f * (dy > 0 ? 1 : -1)), ImVec2(cx + dx * sz, cy + 2.f * (dy > 0 ? 1 : -1)), s1, 2.f);
-                dl->AddLine(ImVec2(cx + 2.f * (dx > 0 ? 1 : -1), cy + dy * cr), ImVec2(cx + 2.f * (dx > 0 ? 1 : -1), cy + dy * sz), s1, 2.f);
-
-                dl->PathArcTo(ImVec2(arc_cx, arc_cy), cr, angle_start, angle_end, 8);
-                dl->PathStroke(s2, 0, 1.f);
-                dl->AddLine(ImVec2(cx + dx * cr, cy), ImVec2(cx + dx * sz, cy), s2, 1.f);
-                dl->AddLine(ImVec2(cx, cy + dy * cr), ImVec2(cx, cy + dy * sz), s2, 1.f);
-
-                dl->PathArcTo(ImVec2(arc_cx, arc_cy), cr, angle_start, angle_end, 8);
-                dl->PathStroke(col, 0, 1.f);
-                dl->AddLine(ImVec2(cx + dx * cr, cy), ImVec2(cx + dx * sz, cy), col, 1.f);
-                dl->AddLine(ImVec2(cx, cy + dy * cr), ImVec2(cx, cy + dy * sz), col, 1.f);
-            } else {
-                dl->AddLine(ImVec2(cx + 2.f * (dx > 0 ? 1 : -1), cy + 2.f * (dy > 0 ? 1 : -1)), ImVec2(cx + dx * sz + 2.f * (dx > 0 ? 1 : -1), cy + 2.f * (dy > 0 ? 1 : -1)), s1, 2.f);
-                dl->AddLine(ImVec2(cx + 2.f * (dx > 0 ? 1 : -1), cy + 2.f * (dy > 0 ? 1 : -1)), ImVec2(cx + 2.f * (dx > 0 ? 1 : -1), cy + dy * sz + 2.f * (dy > 0 ? 1 : -1)), s1, 2.f);
-
-                dl->AddLine(ImVec2(cx, cy), ImVec2(cx + dx * sz, cy), s2, 1.f);
-                dl->AddLine(ImVec2(cx, cy), ImVec2(cx, cy + dy * sz), s2, 1.f);
-
-                dl->AddLine(ImVec2(cx, cy), ImVec2(cx + dx * sz, cy), col, 1.f);
-                dl->AddLine(ImVec2(cx, cy), ImVec2(cx, cy + dy * sz), col, 1.f);
-            }
-        };
-
-        corner(x1, y1, 1, 1);
-        corner(x2, y1, -1, 1);
-        corner(x1, y2, 1, -1);
-        corner(x2, y2, -1, -1);
+        dl->AddRect(ImVec2(x1 - 1.f, y1 - 1.f), ImVec2(x2 + 2.f, y2 + 2.f), border, 0.f, 0, 1.f);
+        dl->AddRect(ImVec2(x1 + 1.f, y1 + 1.f), ImVec2(x2, y2), border, 0.f, 0, 1.f);
+        dl->AddRect(ImVec2(x1, y1), ImVec2(x2 + 1.f, y2 + 1.f), col, 0.f, 0, 1.f);
+        return;
     }
+    // Corner box: each corner a quarter of the shorter side.
+    const float len = std::max(3.f, roundf(std::min(x2 - x1, y2 - y1) * 0.25f));
+    hline(dl, x1, x1 + len, y1, col, border); vline(dl, x1, y1, y1 + len, col, border);
+    hline(dl, x2 - len + 1.f, x2 + 1.f, y1, col, border); vline(dl, x2, y1, y1 + len, col, border);
+    hline(dl, x1, x1 + len, y2, col, border); vline(dl, x1, y2 - len + 1.f, y2 + 1.f, col, border);
+    hline(dl, x2 - len + 1.f, x2 + 1.f, y2, col, border); vline(dl, x2, y2 - len + 1.f, y2 + 1.f, col, border);
 }
 
-void visuals::dhp(int hp, int max_hp, const ImVec2& t, const ImVec2& b, float box_h, float a) {
+// Health bar to the left of the box, coloured by the health left; the
+// number sits beside the top of the fill once some health is lost.
+void visuals::dhp(int hp, int max_hp, const ImVec2& t, const ImVec2& b, float a) {
     if (a < 0.01f) return;
-    (void)box_h;
-
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
-
     if (max_hp <= 0) max_hp = 100;
     hp = std::clamp(hp, 0, max_hp);
-    float pct = float(hp) / float(max_hp);
+    const float pct = float(hp) / float(max_hp);
 
-    float bx = roundf(t.x - 6.f);
-    float bw = 3.f;
-    float bh = roundf(b.y - t.y);
-    float fh = bh * pct;
+    const float x1 = t.x - 4.f, x0 = x1 - 2.f;   // 2 px bar, 3 px gap to the box border
+    const float y0 = t.y, y1 = b.y + 1.f;
+    const float fill_top = roundf(y1 - (y1 - y0) * pct);
+    dl->AddRectFilled(ImVec2(x0 - 1.f, y0 - 1.f), ImVec2(x1 + 1.f, y1 + 1.f), black(0.75f * a));
+    if (y1 - fill_top >= 1.f) dl->AddRectFilled(ImVec2(x0, fill_top), ImVec2(x1, y1), health_color(pct, a));
 
-    float top_y = t.y;
-    float bot_y = b.y;
-    float fill_top = roundf(bot_y - fh);
-
-    dl->AddRectFilled(ImVec2(bx - 2.f, top_y - 2.f), ImVec2(bx + bw + 2.f, bot_y + 2.f), IM_COL32(0, 0, 0, (int)(120 * a)), 1.f);
-    dl->AddRectFilled(ImVec2(bx - 1.f, top_y - 1.f), ImVec2(bx + bw + 1.f, bot_y + 1.f), IM_COL32(0, 0, 0, (int)(200 * a)), 0.f);
-    dl->AddRect(ImVec2(bx - 1.f, top_y - 1.f), ImVec2(bx + bw + 1.f, bot_y + 1.f), IM_COL32(30, 30, 30, (int)(255 * a)), 0, 0, 1.f);
-
-    ImU32 col_top = IM_COL32(
-        static_cast<int>(cfg::esp::health_col.x * 255),
-        static_cast<int>(cfg::esp::health_col.y * 255),
-        static_cast<int>(cfg::esp::health_col.z * 255),
-        static_cast<int>(cfg::esp::health_col.w * 255 * a)
-    );
-    ImU32 col_bot = IM_COL32(
-        static_cast<int>(cfg::esp::health_col.x * 180),
-        static_cast<int>(cfg::esp::health_col.y * 180),
-        static_cast<int>(cfg::esp::health_col.z * 180),
-        static_cast<int>(cfg::esp::health_col.w * 255 * a)
-    );
-
-    if (fh > 1.f) {
-        dl->AddRectFilledMultiColor(ImVec2(bx, fill_top), ImVec2(bx + bw, bot_y), col_top, col_top, col_bot, col_bot);
-    }
-
-    if (hp < max_hp && espFont && bh > 20.f) {
+    if (hp < max_hp && espFont && y1 - y0 >= 28.f) {
         char txt[8];
-        snprintf(txt, sizeof(txt), "%d", hp);
-        float fs = 10.f;
-        ImVec2 ts = espFont->CalcTextSizeA(fs, FLT_MAX, 0.f, txt);
-        float tx = roundf(bx + (bw - ts.x) * 0.5f);
-        float ty = roundf(fill_top - ts.y * 0.5f);
-        if (ty < top_y) ty = top_y;
-        if (ty + ts.y > bot_y) ty = bot_y - ts.y;
-        draw_text_outlined(dl, espFont, fs, ImVec2(tx, ty), IM_COL32(255, 255, 255, (int)(255 * a)), txt);
+        std::snprintf(txt, sizeof(txt), "%d", hp);
+        const float fs = 11.f;
+        const ImVec2 ts = espFont->CalcTextSizeA(fs, FLT_MAX, 0.f, txt);
+        const float ty = std::clamp(roundf(fill_top - ts.y * 0.5f), y0 - ts.y * 0.5f, y1 - ts.y * 0.5f);
+        draw_text_outlined(dl, espFont, fs, ImVec2(roundf(x0 - 3.f - ts.x), ty), IM_COL32(255, 255, 255, int(255 * a)), txt);
     }
 }
 
-void visuals::dnick(const char* name, const ImVec2& box_max, float cx, float sz, float a) {
+// Name centred above the box.
+void visuals::dnick(const char* name, const ImVec2& box_min, float cx, float sz, float a) {
     if (!espFont || a < 0.01f || !name) return;
-
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
-
-    ImVec2 ts = espFont->CalcTextSizeA(sz, FLT_MAX, 0.f, name);
-    ImVec2 tp(roundf(cx - ts.x * 0.5f), roundf(box_max.y + 4.f));
-
-    ImU32 col = IM_COL32(
-        static_cast<int>(cfg::esp::name_col.x * 255),
-        static_cast<int>(cfg::esp::name_col.y * 255),
-        static_cast<int>(cfg::esp::name_col.z * 255),
-        static_cast<int>(cfg::esp::name_col.w * 255 * a)
-    );
-    draw_text_outlined(dl, espFont, sz, tp, col, name);
+    const ImVec2 ts = espFont->CalcTextSizeA(sz, FLT_MAX, 0.f, name);
+    const ImVec2 tp(roundf(cx - ts.x * 0.5f), roundf(box_min.y - ts.y - 3.f));
+    draw_text_outlined(dl, espFont, sz, tp, rgba(cfg::esp::name_col, a), name);
 }
 
 // Weapon icon under the box: the atlas icon of this weapon id (weapon_icons.h), tinted by
@@ -557,28 +537,25 @@ void visuals::dweapon(int weapon_id, float cx, float y, float box_w, float sz, f
     const char* label = weapon::name(weapon_id);
     if (!label || a < 0.01f) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    const ImU32 col = IM_COL32(
-        static_cast<int>(cfg::esp::box_col.x * 255),
-        static_cast<int>(cfg::esp::box_col.y * 255),
-        static_cast<int>(cfg::esp::box_col.z * 255),
-        static_cast<int>(cfg::esp::box_col.w * 255 * a)
-    );
+    const ImU32 col = rgba(cfg::esp::box_col, a);
     const weapon_icon_rect* icon = nullptr;
     for (const weapon_icon_rect& r : weapon_icon_rects)
         if (r.id == weapon_id) { icon = &r; break; }
     if (icon && g_weapon_atlas_tex) {
-        // Height follows the distance-scaled label size; the icon is then shrunk so it
-        // never gets much wider than the box.
-        float h = std::clamp(sz * 1.6f, 16.f, 34.f);
+        // Height follows the label size; the icon is then shrunk so it never
+        // gets much wider than the box.
+        float h = std::clamp(sz * 1.45f, 12.f, 28.f);
         float w = h * float(icon->w) / float(icon->h);
-        const float max_w = std::max(box_w * 1.2f, 36.f);
+        const float max_w = std::max(box_w * 1.4f, 34.f);
         if (w > max_w) { h *= max_w / w; w = max_w; }
         const ImVec2 p0(roundf(cx - w * 0.5f), roundf(y));
-        const ImVec2 p1(roundf(cx + w * 0.5f), roundf(y + h));
+        const ImVec2 p1(p0.x + roundf(w), p0.y + roundf(h));
         const ImVec2 uv0(float(icon->x) / float(weapon_icons_w), float(icon->y) / float(weapon_icons_h));
         const ImVec2 uv1(float(icon->x + icon->w) / float(weapon_icons_w), float(icon->y + icon->h) / float(weapon_icons_h));
-        const ImU32 shadow = IM_COL32(0, 0, 0, int(160 * a));
-        dl->AddImage(g_weapon_atlas_tex, ImVec2(p0.x + 1.f, p0.y + 1.f), ImVec2(p1.x + 1.f, p1.y + 1.f), uv0, uv1, shadow);
+        // Dark halo on all four sides, then the tinted icon.
+        const ImU32 halo = black(0.55f * a);
+        for (const ImVec2 d : {ImVec2(-1.f, 0.f), ImVec2(1.f, 0.f), ImVec2(0.f, -1.f), ImVec2(0.f, 1.f)})
+            dl->AddImage(g_weapon_atlas_tex, ImVec2(p0.x + d.x, p0.y + d.y), ImVec2(p1.x + d.x, p1.y + d.y), uv0, uv1, halo);
         dl->AddImage(g_weapon_atlas_tex, p0, p1, uv0, uv1, col);
         return;
     }
@@ -587,14 +564,12 @@ void visuals::dweapon(int weapon_id, float cx, float y, float box_w, float sz, f
     draw_text_outlined(dl, espFont, sz, ImVec2(roundf(cx - ts.x * 0.5f), roundf(y)), col, label);
 }
 
+// 1 px dark outline on all sides: readable on bright and dark backgrounds.
 void visuals::draw_text_outlined(ImDrawList* dl, ImFont* font, float size, const ImVec2& pos, ImU32 color, const char* text) {
-    if (!font || !dl) return;
-
-    int a = (color >> IM_COL32_A_SHIFT) & 0xFF;
-    int s1 = static_cast<int>(a * 0.4f);
-    int s2 = static_cast<int>(a * 0.7f);
-
-    dl->AddText(font, size, ImVec2(pos.x + 2.f, pos.y + 2.f), IM_COL32(0, 0, 0, s1), text);
-    dl->AddText(font, size, ImVec2(pos.x + 1.f, pos.y + 1.f), IM_COL32(0, 0, 0, s2), text);
+    if (!font || !dl || !text) return;
+    const int a = int((color >> IM_COL32_A_SHIFT) & 0xFF);
+    const ImU32 outline = IM_COL32(0, 0, 0, a * 220 / 255);
+    for (const ImVec2 d : {ImVec2(-1.f, 0.f), ImVec2(1.f, 0.f), ImVec2(0.f, -1.f), ImVec2(0.f, 1.f)})
+        dl->AddText(font, size, ImVec2(pos.x + d.x, pos.y + d.y), outline, text);
     dl->AddText(font, size, pos, color, text);
 }
