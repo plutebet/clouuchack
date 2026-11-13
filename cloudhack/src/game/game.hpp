@@ -129,6 +129,31 @@ namespace v100 {
     inline constexpr uint64_t weapon_part_team = 0x40;            // WeaponContext.Team (byte) @+0x10
     inline constexpr uint64_t weapon_part_active = 0x80;          // WeaponContext.ActiveWeapon : jrx @+0x50
     inline constexpr uint64_t weapon_id = 0x10;                   // jrx.<oqrg> WeaponId { byte Raw }
+
+    // ---- hitboxes (managed: dump.cs 1.1.0; native: libunity.so 1.1.0, build-id 69815f2befe135c2) ----
+    // Managed side (dump.cs, measured):
+    inline constexpr uint64_t model_hitboxes = 0x18;        // bis.acis : HitBoxCollider[]
+    inline constexpr uint64_t hitbox_bone = 0x20;           // HitBoxCollider._hitBox.bone : HumanBodyBones (int)
+    inline constexpr uint64_t hitbox_loss_penetration = 0x24; // HitBoxCollider._hitBox.lossPenetrationPower (int)
+    inline constexpr uint64_t hitbox_collider = 0x28;       // HitBoxCollider.upjp : UnityEngine.Collider
+    inline constexpr uint64_t boxcollider_typeinfo = 0xCD1F4E8;     // UnityEngine.BoxCollider_TypeInfo (script.json)
+    inline constexpr uint64_t capsulecollider_typeinfo = 0xCD1F878; // UnityEngine.CapsuleCollider_TypeInfo (script.json)
+    // Native side. Every offset below was read from the *_Injected icall
+    // thunks of libunity.so (VA = file offset + 0x4000 in .text):
+    //   Component::get_transform_Injected  VA 0x57CB9C0: ldr x19,[x0,#0x20]
+    //   GameObject::get_transform_Injected VA 0x57CC45C: ldr x8,[x0,#0x20]; ldr x19,[x8,#8]
+    //   BoxCollider  get_center VA 0x57E5350 (+0x60 Vec3)  get_size VA 0x57E5368 (+0x6C Vec3)
+    //   CapsuleCollider get_radius VA 0x57E5398 (+0x60 f32)  get_height VA 0x57E53A4 (+0x64 f32)
+    //                   get_direction VA 0x57E53B0 (+0x68 i32)  get_center VA 0x57E5380 (+0x6C Vec3)
+    inline constexpr uint64_t native_component_game_object = 0x20;  // native Component -> native GameObject
+    inline constexpr uint64_t native_game_object_components = 0x20; // native GameObject -> ComponentPair array
+    inline constexpr uint64_t native_component_pair_ptr = 0x08;     // ComponentPair[0].component (Transform is always first)
+    inline constexpr uint64_t native_box_center = 0x60;
+    inline constexpr uint64_t native_box_size = 0x6C;
+    inline constexpr uint64_t native_capsule_radius = 0x60;
+    inline constexpr uint64_t native_capsule_height = 0x64;
+    inline constexpr uint64_t native_capsule_direction = 0x68;      // 0 = X, 1 = Y, 2 = Z
+    inline constexpr uint64_t native_capsule_center = 0x6C;
 }
 
 struct remote_map { uint64_t begin{}, end{}; bool writable{}; };

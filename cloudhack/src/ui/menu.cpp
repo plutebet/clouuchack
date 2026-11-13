@@ -47,9 +47,9 @@ namespace ui::menu {
         float g_resize_sx0 = 1.f, g_resize_sy0 = 1.f, g_resize_w0 = 1.f, g_resize_h0 = 1.f;
         ImVec2 g_grip_min, g_grip_max;         // resize grip of this frame; taps starting there are ignored
 
-        // Panel size in px. Base width 330 px, base height 62 px + 910 px per unit of scale_y.
+        // Panel size in px. Base width 330 px, base height 62 px + 444 px per unit of scale_y.
         float panel_w(float sx, float k) { return ImMin(330.f * k * sx, g_sw - 16.f * k); }
-        float panel_h(float sy, float k) { return 62.f * k + 380.f * k * sy; }
+        float panel_h(float sy, float k) { return 62.f * k + 444.f * k * sy; } // +64 per toggle row
         // Keeps the whole panel inside the screen with an 8 px margin.
         ImVec2 clamp_panel(ImVec2 q, float w, float h, float k) {
             q.x = ImClamp(q.x, 8.f * k, ImMax(8.f * k, g_sw - 8.f * k - w));
@@ -350,6 +350,7 @@ namespace ui::menu {
             {"Name", &cfg::esp::name},
             {"Health", &cfg::esp::health},
             {"Weapon", &cfg::esp::weapon},
+            {"Hitbox", &cfg::esp::hitbox},
         };
         for (const item& it : items) {
             bool v = *it.value;

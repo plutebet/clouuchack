@@ -11,6 +11,7 @@
 #include "../game/player.hpp"
 #include "../game/camera.hpp"
 #include "../game/weapon.hpp"
+#include "../game/hitbox.hpp"
 #include "esp/weapon_icons.h"
 #include "../ui/theme/theme.hpp"
 #include "../ui/cfg.hpp"
@@ -50,6 +51,55 @@ namespace {
             if (live.count(it->first)) ++it;
             else it = map.erase(it);
         }
+    }
+
+    // ---- hitbox wireframes -------------------------------------------
+    ImU32 hb_color(const ImVec4& c, float a) {
+        return IM_COL32(int(c.x * 255.f), int(c.y * 255.f), int(c.z * 255.f),
+                        int(std::clamp(c.w * a, 0.f, 1.f) * 255.f));
+    }
+
+    void hb_line(ImDrawList* dl, const ImVec2& p, const ImVec2& q, ImU32 col, ImU32 outline) {
+        dl->AddLine(p, q, outline, 3.f);
+        dl->AddLine(p, q, col, 1.5f);
+    }
+
+    void draw_hitbox(ImDrawList* dl, const hitbox::WorldHitbox& h, const Vector3& delta,
+                     const matrix& view, const matrix& projection, ImU32 col, ImU32 outline) {
+        hitbox::WorldHitbox w = h;
+        w.center = w.center + delta;
+        if (w.shape == hitbox::Shape::Box) {
+            Vector3 corner[8];
+            hitbox::box_corners(w, corner);
+            ImVec2 pt[8];
+            bool vis[8];
+            for (int i = 0; i < 8; ++i) vis[i] = world_to_screen(corner[i], view, projection, pt[i]);
+            for (int i = 0; i < 8; ++i)
+                for (int bit = 1; bit <= 4; bit <<= 1)
+                    if (!(i & bit) && vis[i] && vis[i | bit]) hb_line(dl, pt[i], pt[i | bit], col, outline);
+            return;
+        }
+        Vector3 a, b;
+        hitbox::capsule_ends(w, a, b);
+        // Camera right axis in world space = first column of the view rotation.
+        const float* v = reinterpret_cast<const float*>(&view);
+        const Vector3 right(v[0], v[4], v[8]);
+        ImVec2 pa, pb, ra, rb;
+        if (!world_to_screen(a, view, projection, pa) || !world_to_screen(b, view, projection, pb) ||
+            !world_to_screen(a + right * w.radius, view, projection, ra) ||
+            !world_to_screen(b + right * w.radius, view, projection, rb)) return;
+        const float sa = std::hypot(ra.x - pa.x, ra.y - pa.y), sb = std::hypot(rb.x - pb.x, rb.y - pb.y);
+        if (!(sa >= 0.5f) || !(sb >= 0.5f)) return;
+        const float dx = pb.x - pa.x, dy = pb.y - pa.y, len = std::hypot(dx, dy);
+        if (len > 1.f) {
+            const ImVec2 n(-dy / len, dx / len);
+            hb_line(dl, ImVec2(pa.x + n.x * sa, pa.y + n.y * sa), ImVec2(pb.x + n.x * sb, pb.y + n.y * sb), col, outline);
+            hb_line(dl, ImVec2(pa.x - n.x * sa, pa.y - n.y * sa), ImVec2(pb.x - n.x * sb, pb.y - n.y * sb), col, outline);
+        }
+        dl->AddCircle(pa, sa, outline, 20, 3.f);
+        dl->AddCircle(pb, sb, outline, 20, 3.f);
+        dl->AddCircle(pa, sa, col, 20, 1.5f);
+        dl->AddCircle(pb, sb, col, 20, 1.5f);
     }
 
     // ---- snapshot interpolation --------------------------------------
@@ -104,7 +154,7 @@ namespace {
 
 void visuals::draw() {
     if (!(g_sw >= 2.f) || !(g_sh >= 2.f)) return;
-    bool any = cfg::esp::box || cfg::esp::name || cfg::esp::health || cfg::esp::weapon;
+    bool any = cfg::esp::box || cfg::esp::name || cfg::esp::health || cfg::esp::weapon || cfg::esp::hitbox;
     if (!any) { esp_wait("all ESP options disabled"); return; }
 
     crash::stage("esp-players");
@@ -112,6 +162,7 @@ void visuals::draw() {
     if (Players.empty()) { esp_wait("player discovery / registry scan"); return; }
     const long long now_ms = diag::now_ms();
     const long long now_us = diag::now_us();
+    hitbox::begin_frame();
 
     // Per-object caches must not outlive the match: a new match reuses heap
     // addresses, and a stale "dead since" entry would hide a live player.
@@ -124,6 +175,7 @@ void visuals::draw() {
         purge_missing(g_last_hp, live);
         purge_missing(g_motion, live);
         purge_missing(player::g_transform_cache, live);
+        purge_missing(hitbox::g_cache, live);
         purge_missing(weapon::g_players, live);
     }
 
@@ -203,6 +255,8 @@ void visuals::draw() {
         int max_hp{100};
         int weapon{-1};
         float distance{0.f};
+        std::vector<hitbox::WorldHitbox> hitboxes;
+        Vector3 hitbox_delta{};   // interpolated feet minus sampled feet: moves the hitboxes with the box
     };
     std::vector<enemy_frame> frame_enemies;
     auto read_enemy_pose = [&](enemy_frame& e) -> bool {
@@ -211,6 +265,8 @@ void visuals::draw() {
         e.position = Shape.feet;
         e.head = Shape.has_head ? Shape.head : Shape.feet + Vector3(0.f, 1.67f, 0.f);
         e.has_head = Shape.has_head;
+        if (cfg::esp::hitbox) hitbox::read(*e.snap, Shape.feet, e.hitboxes);
+        else e.hitboxes.clear();
         return true;
     };
     for (const player_snapshot& p : Players) {
@@ -274,7 +330,9 @@ void visuals::draw() {
     for (enemy_frame& e : frame_enemies) {
         motion_state& m = g_motion[e.object];
         motion_update(m, e.position, e.head, sample_us);
+        const Vector3 sampled_feet = e.position;
         if (cfg::esp::smooth) motion_render(m, sample_us, e.position, e.head);
+        e.hitbox_delta = e.position - sampled_feet;
     }
 
     // Camera selection. The controller camera whose bor is
@@ -396,6 +454,15 @@ void visuals::draw() {
         // Distant players fade a little so the close ones stand out.
         const float fade = 1.f - 0.4f * std::clamp((Enemy.distance - 40.f) / 110.f, 0.f, 1.f);
         const float text_sz = std::clamp(box_h * 0.11f, 11.f, 16.f);
+        if (cfg::esp::hitbox && !Enemy.hitboxes.empty()) {
+            ImDrawList* dl = ImGui::GetBackgroundDrawList();
+            const ImU32 outline = IM_COL32(0, 0, 0, int(190.f * fade));
+            const ImU32 body_col = hb_color(cfg::esp::box_col, fade);
+            const ImU32 head_col = IM_COL32(255, 230, 80, int(255.f * fade));
+            for (const hitbox::WorldHitbox& hb : Enemy.hitboxes)
+                draw_hitbox(dl, hb, Enemy.hitbox_delta, ViewMatrix, ProjectionMatrix,
+                            hb.bone == hitbox::kHeadBone ? head_col : body_col, outline);
+        }
         if (cfg::esp::box) dbox(it.min, it.max, fade);
         if (cfg::esp::health) dhp(Enemy.hp, Enemy.max_hp, it.min, it.max, fade);
         if (cfg::esp::name) {

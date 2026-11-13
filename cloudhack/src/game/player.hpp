@@ -452,10 +452,8 @@ namespace player {
     };
     inline std::unordered_map<uint64_t, transform_cache_entry> g_transform_cache;
 
-    inline bool resolve_hierarchy(uint64_t managed, hierarchy_ref& ref) noexcept {
+    inline bool resolve_hierarchy_native(uint64_t native, hierarchy_ref& ref) noexcept {
         ref = {};
-        if (!obj_ptr(managed)) return false;
-        const uint64_t native = rpm<uint64_t>(managed + v100::unity_cached_ptr);
         if (!obj_ptr(native)) return false;
         if (g_transform_layout.pid != proc::pid || g_transform_layout.data_offset < 0) {
             Vector3 probe{};
@@ -490,6 +488,12 @@ namespace player {
             }
         }
         return true;
+    }
+
+    inline bool resolve_hierarchy(uint64_t managed, hierarchy_ref& ref) noexcept {
+        ref = {};
+        if (!obj_ptr(managed)) return false;
+        return resolve_hierarchy_native(rpm<uint64_t>(managed + v100::unity_cached_ptr), ref);
     }
 
     inline bool hierarchy_position(const hierarchy_ref& ref, Vector3& out) noexcept {

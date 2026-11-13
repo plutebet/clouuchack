@@ -21,6 +21,7 @@ namespace esp {
     inline bool name = false;
     inline bool health = true;
     inline bool weapon = true;
+    inline bool hitbox = false;
     inline int box_type = 0;
     inline float box_rounding = 0.f;
     // Interpolate enemy positions between game frames (one game frame of
