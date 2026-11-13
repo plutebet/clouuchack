@@ -127,6 +127,7 @@ namespace v100 {
     inline constexpr uint64_t weapon_typeinfo = 0xCD30D00;        // jrx_TypeInfo (active weapon instance)
     inline constexpr uint64_t weapon_part_owner = 0x30;           // uyg.kbdx WeaponContext @0x30 -> Owner NetObjectId._id (uint) @+0x0
     inline constexpr uint64_t weapon_part_team = 0x40;            // WeaponContext.Team (byte) @+0x10
+    inline constexpr uint64_t weapon_part_nav = 0x50;             // WeaponContext.NavigationContext @+0x20: { bool IsCrouch; bool IsJump; ... }
     inline constexpr uint64_t weapon_part_active = 0x80;          // WeaponContext.ActiveWeapon : jrx @+0x50
     inline constexpr uint64_t weapon_id = 0x10;                   // jrx.<oqrg> WeaponId { byte Raw }
 }

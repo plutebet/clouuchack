@@ -67,6 +67,49 @@ namespace {
     };
     std::unordered_map<uint64_t, motion_state> g_motion;
 
+    // ---- per-enemy animation ------------------------------------------
+    // Fade-in when an enemy appears, a health bar that slides down with a
+    // short "damage trail", and a brief flash of the box on a hit.
+    struct anim_state {
+        float alpha{0.f};       // fade-in 0..1
+        float shown_hp{-1.f};   // health drawn (eases toward the real value)
+        float trail_hp{-1.f};   // health before the last hits (fades after a pause)
+        int last_hp{-1};
+        long long hit_ms{0};
+    };
+    std::unordered_map<uint64_t, anim_state> g_anim;
+
+    void anim_update(anim_state& s, int hp, float dt, long long now_ms) {
+        s.alpha = std::min(1.f, s.alpha + dt * 7.f);
+        if (s.shown_hp < 0.f || float(hp) > s.shown_hp) {   // first sample, heal or respawn: snap
+            s.shown_hp = s.trail_hp = float(hp);
+        } else {
+            if (s.last_hp >= 0 && hp < s.last_hp) {
+                s.trail_hp = std::max(s.trail_hp, s.shown_hp);
+                s.hit_ms = now_ms;
+            }
+            s.shown_hp += (float(hp) - s.shown_hp) * std::min(1.f, dt * 14.f);
+            if (now_ms - s.hit_ms > 350) s.trail_hp += (s.shown_hp - s.trail_hp) * std::min(1.f, dt * 6.f);
+            s.trail_hp = std::max(s.trail_hp, s.shown_hp);
+        }
+        s.last_hp = hp;
+    }
+
+    // At most `max_glyphs` UTF-8 characters, ".." appended when cut.
+    std::string clip_utf8(const char* text, size_t max_glyphs) {
+        std::string out;
+        size_t glyphs = 0;
+        for (const char* p = text; *p; ) {
+            const unsigned char c = static_cast<unsigned char>(*p);
+            const size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 1;
+            if (glyphs == max_glyphs) { out += ".."; break; }
+            for (size_t i = 0; i < len && p[i]; ++i) out.push_back(p[i]);
+            p += len;
+            ++glyphs;
+        }
+        return out;
+    }
+
     float vdist(const Vector3& a, const Vector3& b) {
         const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
         return std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -125,6 +168,7 @@ void visuals::draw() {
         purge_missing(g_motion, live);
         purge_missing(player::g_transform_cache, live);
         purge_missing(weapon::g_players, live);
+        purge_missing(g_anim, live);
     }
 
     // Resolve at most one name per 100 ms (dozens of reads each). Players
@@ -202,6 +246,7 @@ void visuals::draw() {
         int hp{0};
         int max_hp{100};
         int weapon{-1};
+        int stance{-1};
         float distance{0.f};
     };
     std::vector<enemy_frame> frame_enemies;
@@ -245,7 +290,10 @@ void visuals::draw() {
         e.snap = &p;
         e.hp = Health.hp;
         e.max_hp = Health.max_hp;
-        if (cfg::esp::weapon) e.weapon = weapon::active_id(p);
+        if (cfg::esp::weapon || cfg::esp::stance) {
+            e.weapon = weapon::active_id(p);
+            e.stance = weapon::stance(p.object);
+        }
         if (!read_enemy_pose(e)) continue;
         ++positioned;
         e.distance = calculate_distance(e.position, LocalPosition);
@@ -368,23 +416,32 @@ void visuals::draw() {
     selected_kind_prev = selected_kind;
 
     crash::stage("esp-draw");
+    const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.001f, 0.1f);
     // Box from the feet to just above the head: the head point is the eye
     // pivot, so 15 cm are added to keep the top edge off the forehead.
     struct draw_item { ImVec2 min, max; float cx; const enemy_frame* e; };
     std::vector<draw_item> items;
     items.reserve(frame_enemies.size());
+    std::vector<const enemy_frame*> off_screen;
     for (const auto& Enemy : frame_enemies) {
         ImVec2 top, foot;
-        if (!world_to_screen(Enemy.head + Vector3(0.f, 0.15f, 0.f), ViewMatrix, ProjectionMatrix, top) ||
-            !world_to_screen(Enemy.position, ViewMatrix, ProjectionMatrix, foot)) continue;
-        ++projected;
+        const bool projected_ok = world_to_screen(Enemy.head + Vector3(0.f, 0.15f, 0.f), ViewMatrix, ProjectionMatrix, top) &&
+                                  world_to_screen(Enemy.position, ViewMatrix, ProjectionMatrix, foot);
         float y1 = std::min(top.y, foot.y), y2 = std::max(top.y, foot.y);
-        if (!(y2 - y1 >= 1.f) || y2 - y1 > g_sh * 3.f) continue;
+        const float cx = roundf((top.x + foot.x) * 0.5f);
+        if (!projected_ok || !std::isfinite(cx) || !std::isfinite(y1) || !std::isfinite(y2) ||
+            !(y2 - y1 >= 1.f) || y2 - y1 > g_sh * 3.f) {
+            off_screen.push_back(&Enemy);
+            continue;
+        }
+        ++projected;
         if (y2 - y1 < 10.f) { const float mid = (y1 + y2) * 0.5f; y1 = mid - 5.f; y2 = mid + 5.f; }
         const float half_w = std::max(3.f, (y2 - y1) * 0.21f);
-        const float cx = roundf((top.x + foot.x) * 0.5f);
         const ImVec2 mn(roundf(cx - half_w), roundf(y1)), mx(roundf(cx + half_w), roundf(y2));
-        if (mx.x < -64.f || mn.x > g_sw + 64.f || mx.y < -64.f || mn.y > g_sh + 64.f) continue;
+        if (mx.x < 0.f || mn.x > g_sw || mx.y < 0.f || mn.y > g_sh) {
+            off_screen.push_back(&Enemy);
+            continue;
+        }
         items.push_back({mn, mx, cx, &Enemy});
     }
     // Far first, near last: the closest player is never covered by another box.
@@ -392,20 +449,29 @@ void visuals::draw() {
               [](const draw_item& l, const draw_item& r) { return l.e->distance > r.e->distance; });
     for (const draw_item& it : items) {
         const enemy_frame& Enemy = *it.e;
+        anim_state& anim = g_anim[Enemy.object];
+        anim_update(anim, Enemy.hp, dt, now_ms);
         const float box_h = it.max.y - it.min.y;
         // Distant players fade a little so the close ones stand out.
-        const float fade = 1.f - 0.4f * std::clamp((Enemy.distance - 40.f) / 110.f, 0.f, 1.f);
+        const float fade = (1.f - 0.4f * std::clamp((Enemy.distance - 40.f) / 110.f, 0.f, 1.f)) * anim.alpha;
+        const float flash = std::clamp(1.f - float(now_ms - anim.hit_ms) / 160.f, 0.f, 1.f);
         const float text_sz = std::clamp(box_h * 0.11f, 11.f, 16.f);
-        if (cfg::esp::box) dbox(it.min, it.max, fade);
-        if (cfg::esp::health) dhp(Enemy.hp, Enemy.max_hp, it.min, it.max, fade);
+        if (cfg::esp::box) dbox(it.min, it.max, fade, flash);
+        if (cfg::esp::health) dhp(anim.shown_hp, anim.trail_hp, Enemy.hp, Enemy.max_hp, it.min, it.max, fade);
         if (cfg::esp::name) {
             const auto found = g_name_cache.find(Enemy.object);
-            const char* label = found != g_name_cache.end() && !found->second.name.empty()
-                ? found->second.name.c_str() : "Enemy";
-            dnick(label, it.min, it.cx, text_sz, fade);
+            const bool known = found != g_name_cache.end() && !found->second.name.empty();
+            const std::string label = clip_utf8(known ? found->second.name.c_str() : "Enemy", 16);
+            dnick(label.c_str(), it.min, it.cx, text_sz, known ? fade : fade * 0.7f);
         }
-        if (cfg::esp::weapon) dweapon(Enemy.weapon, it.cx, it.max.y + 3.f, it.max.x - it.min.x, text_sz, fade);
+        if (cfg::esp::stance && (Enemy.stance == 1 || Enemy.stance == 2))
+            dstance(Enemy.stance, it.min, it.max, fade);
+        float below = it.max.y + 3.f;
+        if (cfg::esp::weapon) below = dweapon(Enemy.weapon, it.cx, below, it.max.x - it.min.x, text_sz, fade);
+        if (cfg::esp::distance) ddistance(Enemy.distance, it.cx, below, fade);
     }
+    if (cfg::esp::arrows)
+        for (const enemy_frame* e : off_screen) darrow(e->position + Vector3(0.f, 0.9f, 0.f), e->distance, ViewMatrix);
 
     // PROBE (read-only, opt-in): while /data/local/tmp/bycmd_probe exists, dumps the szi bytes
     // (Player odq+0x88 -> szi +0x10..+0x1F) of every enemy every 100 ms. A line is logged when the
@@ -471,11 +537,24 @@ namespace {
     }
 }
 
-void visuals::dbox(const ImVec2& t, const ImVec2& b, float a) {
+namespace {
+    // Keeps a label of size `ts` inside the screen with a 2 px margin.
+    ImVec2 clamp_label(ImVec2 pos, const ImVec2& ts) {
+        pos.x = std::clamp(pos.x, 2.f, std::max(2.f, g_sw - ts.x - 2.f));
+        pos.y = std::clamp(pos.y, 2.f, std::max(2.f, g_sh - ts.y - 2.f));
+        return ImVec2(roundf(pos.x), roundf(pos.y));
+    }
+    ImU32 mix_white(const ImVec4& c, float t, float a) {
+        return rgba(ImVec4(c.x + (1.f - c.x) * t, c.y + (1.f - c.y) * t, c.z + (1.f - c.z) * t, c.w), a);
+    }
+}
+
+void visuals::dbox(const ImVec2& t, const ImVec2& b, float a, float flash) {
     if (a < 0.01f) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const float x1 = t.x, y1 = t.y, x2 = b.x, y2 = b.y;
-    const ImU32 col = rgba(cfg::esp::box_col, a);
+    // A hit flashes the box towards white for a moment.
+    const ImU32 col = mix_white(cfg::esp::box_col, std::clamp(flash, 0.f, 1.f) * 0.85f, a);
     const ImU32 border = black(0.78f * a);
 
     if (cfg::esp::box_type == 0) {
@@ -492,19 +571,25 @@ void visuals::dbox(const ImVec2& t, const ImVec2& b, float a) {
     hline(dl, x2 - len + 1.f, x2 + 1.f, y2, col, border); vline(dl, x2, y2 - len + 1.f, y2 + 1.f, col, border);
 }
 
-// Health bar to the left of the box, coloured by the health left; the
-// number sits beside the top of the fill once some health is lost.
-void visuals::dhp(int hp, int max_hp, const ImVec2& t, const ImVec2& b, float a) {
+// Health bar to the left of the box. `shown` eases toward the real health,
+// `trail` keeps the health before the last hits for a moment (light part
+// above the fill); the number is the real value.
+void visuals::dhp(float shown, float trail, int hp, int max_hp, const ImVec2& t, const ImVec2& b, float a) {
     if (a < 0.01f) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     if (max_hp <= 0) max_hp = 100;
     hp = std::clamp(hp, 0, max_hp);
-    const float pct = float(hp) / float(max_hp);
+    const float fmax = float(max_hp);
+    const float pct = std::clamp(shown / fmax, 0.f, 1.f);
+    const float trail_pct = std::clamp(std::max(trail, shown) / fmax, 0.f, 1.f);
 
     const float x1 = t.x - 4.f, x0 = x1 - 2.f;   // 2 px bar, 3 px gap to the box border
     const float y0 = t.y, y1 = b.y + 1.f;
     const float fill_top = roundf(y1 - (y1 - y0) * pct);
+    const float trail_top = roundf(y1 - (y1 - y0) * trail_pct);
     dl->AddRectFilled(ImVec2(x0 - 1.f, y0 - 1.f), ImVec2(x1 + 1.f, y1 + 1.f), black(0.75f * a));
+    if (fill_top - trail_top >= 1.f)
+        dl->AddRectFilled(ImVec2(x0, trail_top), ImVec2(x1, fill_top), IM_COL32(255, 255, 255, int(170 * a)));
     if (y1 - fill_top >= 1.f) dl->AddRectFilled(ImVec2(x0, fill_top), ImVec2(x1, y1), health_color(pct, a));
 
     if (hp < max_hp && espFont && y1 - y0 >= 28.f) {
@@ -512,25 +597,37 @@ void visuals::dhp(int hp, int max_hp, const ImVec2& t, const ImVec2& b, float a)
         std::snprintf(txt, sizeof(txt), "%d", hp);
         const float fs = 11.f;
         const ImVec2 ts = espFont->CalcTextSizeA(fs, FLT_MAX, 0.f, txt);
-        const float ty = std::clamp(roundf(fill_top - ts.y * 0.5f), y0 - ts.y * 0.5f, y1 - ts.y * 0.5f);
-        draw_text_outlined(dl, espFont, fs, ImVec2(roundf(x0 - 3.f - ts.x), ty), IM_COL32(255, 255, 255, int(255 * a)), txt);
+        const float ty = std::clamp(fill_top - ts.y * 0.5f, y0 - ts.y * 0.5f, y1 - ts.y * 0.5f);
+        draw_text_outlined(dl, espFont, fs, clamp_label(ImVec2(x0 - 3.f - ts.x, ty), ts), IM_COL32(255, 255, 255, int(255 * a)), txt);
     }
 }
 
-// Name centred above the box.
+// Name centred above the box, kept on screen.
 void visuals::dnick(const char* name, const ImVec2& box_min, float cx, float sz, float a) {
-    if (!espFont || a < 0.01f || !name) return;
+    if (!espFont || a < 0.01f || !name || !*name) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const ImVec2 ts = espFont->CalcTextSizeA(sz, FLT_MAX, 0.f, name);
-    const ImVec2 tp(roundf(cx - ts.x * 0.5f), roundf(box_min.y - ts.y - 3.f));
+    const ImVec2 tp = clamp_label(ImVec2(cx - ts.x * 0.5f, box_min.y - ts.y - 3.f), ts);
     draw_text_outlined(dl, espFont, sz, tp, rgba(cfg::esp::name_col, a), name);
+}
+
+// CROUCH / JUMP beside the top right corner of the box.
+void visuals::dstance(int stance, const ImVec2& box_min, const ImVec2& box_max, float a) {
+    if (!espFont || a < 0.01f) return;
+    const char* label = stance == 2 ? "JUMP" : "CROUCH";
+    const float fs = 10.f;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    const ImVec2 ts = espFont->CalcTextSizeA(fs, FLT_MAX, 0.f, label);
+    const ImU32 col = stance == 2 ? IM_COL32(120, 200, 255, int(255 * a)) : IM_COL32(255, 210, 90, int(255 * a));
+    draw_text_outlined(dl, espFont, fs, clamp_label(ImVec2(box_max.x + 4.f, box_min.y), ts), col, label);
 }
 
 // Weapon icon under the box: the atlas icon of this weapon id (weapon_icons.h), tinted by
 // the ESP colour. The name when the weapon has no icon or the atlas did not upload.
-void visuals::dweapon(int weapon_id, float cx, float y, float box_w, float sz, float a) {
+// Returns the y just below what was drawn (y itself when nothing was).
+float visuals::dweapon(int weapon_id, float cx, float y, float box_w, float sz, float a) {
     const char* label = weapon::name(weapon_id);
-    if (!label || a < 0.01f) return;
+    if (!label || a < 0.01f) return y;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const ImU32 col = rgba(cfg::esp::box_col, a);
     const weapon_icon_rect* icon = nullptr;
@@ -543,7 +640,7 @@ void visuals::dweapon(int weapon_id, float cx, float y, float box_w, float sz, f
         float w = h * float(icon->w) / float(icon->h);
         const float max_w = std::max(box_w * 1.4f, 34.f);
         if (w > max_w) { h *= max_w / w; w = max_w; }
-        const ImVec2 p0(roundf(cx - w * 0.5f), roundf(y));
+        const ImVec2 p0 = clamp_label(ImVec2(cx - w * 0.5f, y), ImVec2(roundf(w), roundf(h)));
         const ImVec2 p1(p0.x + roundf(w), p0.y + roundf(h));
         const ImVec2 uv0(float(icon->x) / float(weapon_icons_w), float(icon->y) / float(weapon_icons_h));
         const ImVec2 uv1(float(icon->x + icon->w) / float(weapon_icons_w), float(icon->y + icon->h) / float(weapon_icons_h));
@@ -552,11 +649,48 @@ void visuals::dweapon(int weapon_id, float cx, float y, float box_w, float sz, f
         for (const ImVec2 d : {ImVec2(-1.f, 0.f), ImVec2(1.f, 0.f), ImVec2(0.f, -1.f), ImVec2(0.f, 1.f)})
             dl->AddImage(g_weapon_atlas_tex, ImVec2(p0.x + d.x, p0.y + d.y), ImVec2(p1.x + d.x, p1.y + d.y), uv0, uv1, halo);
         dl->AddImage(g_weapon_atlas_tex, p0, p1, uv0, uv1, col);
-        return;
+        return p1.y + 2.f;
     }
-    if (!espFont) return;
+    if (!espFont) return y;
     const ImVec2 ts = espFont->CalcTextSizeA(sz, FLT_MAX, 0.f, label);
-    draw_text_outlined(dl, espFont, sz, ImVec2(roundf(cx - ts.x * 0.5f), roundf(y)), col, label);
+    const ImVec2 tp = clamp_label(ImVec2(cx - ts.x * 0.5f, y), ts);
+    draw_text_outlined(dl, espFont, sz, tp, col, label);
+    return tp.y + ts.y + 1.f;
+}
+
+// "24m" centred under the weapon.
+void visuals::ddistance(float meters, float cx, float y, float a) {
+    if (!espFont || a < 0.01f || !std::isfinite(meters)) return;
+    char txt[16];
+    std::snprintf(txt, sizeof(txt), "%dm", int(meters + 0.5f));
+    const float fs = 10.f;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    const ImVec2 ts = espFont->CalcTextSizeA(fs, FLT_MAX, 0.f, txt);
+    draw_text_outlined(dl, espFont, fs, clamp_label(ImVec2(cx - ts.x * 0.5f, y), ts), IM_COL32(220, 220, 220, int(230 * a)), txt);
+}
+
+// Arrow on a circle around the screen centre pointing at an enemy that is
+// out of view: up = ahead, down = behind. Closer enemies get bigger, more
+// opaque arrows.
+void visuals::darrow(const Vector3& world, float meters, const matrix& view) {
+    if (!std::isfinite(meters)) return;
+    const Vector4 cam = matrix_multiply(view, Vector4(world.x, world.y, world.z, 1.f));
+    const float right = cam.x, forward = -cam.z;   // Unity view space looks down -Z
+    if (!std::isfinite(right) || !std::isfinite(forward) || (std::fabs(right) < 1e-4f && std::fabs(forward) < 1e-4f)) return;
+    const float angle = std::atan2(right, forward);
+    const float sn = std::sin(angle), cs = std::cos(angle);
+    const ImVec2 c(g_sw * 0.5f, g_sh * 0.5f);
+    const float radius = std::min(g_sw, g_sh) * 0.38f;
+    const float near_t = 1.f - std::clamp((meters - 5.f) / 60.f, 0.f, 1.f);
+    const float size = 9.f + 6.f * near_t;
+    const float a = 0.55f + 0.45f * near_t;
+    const ImVec2 dir(sn, -cs), side(cs, sn);
+    const ImVec2 tip(c.x + dir.x * (radius + size), c.y + dir.y * (radius + size));
+    const ImVec2 l(c.x + dir.x * radius + side.x * size * 0.6f, c.y + dir.y * radius + side.y * size * 0.6f);
+    const ImVec2 r(c.x + dir.x * radius - side.x * size * 0.6f, c.y + dir.y * radius - side.y * size * 0.6f);
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    dl->AddTriangleFilled(tip, l, r, rgba(cfg::esp::box_col, a));
+    dl->AddTriangle(tip, l, r, black(0.8f * a), 1.f);
 }
 
 // 1 px dark outline on all sides: readable on bright and dark backgrounds.
