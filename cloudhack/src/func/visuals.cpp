@@ -265,9 +265,16 @@ void visuals::draw() {
         e.position = Shape.feet;
         e.head = Shape.has_head ? Shape.head : Shape.feet + Vector3(0.f, 1.67f, 0.f);
         e.has_head = Shape.has_head;
-        if (cfg::esp::hitbox) hitbox::read(*e.snap, Shape.feet, e.hitboxes);
-        else e.hitboxes.clear();
         return true;
+    };
+    // Hitboxes are read and drawn only within cfg::esp::hitbox_range of the local
+    // player (feet to feet, the same e.distance the ESP uses), whatever the other
+    // ESP elements do with the distance.
+    auto read_enemy_hitboxes = [&](enemy_frame& e) {
+        if (cfg::esp::hitbox && hitbox::within_range(e.distance, cfg::esp::hitbox_range))
+            hitbox::read(*e.snap, e.position, e.hitboxes);
+        else
+            e.hitboxes.clear();
     };
     for (const player_snapshot& p : Players) {
         if (p.object == LocalPlayer) continue;
@@ -306,6 +313,7 @@ void visuals::draw() {
         ++positioned;
         e.distance = calculate_distance(e.position, LocalPosition);
         if (e.distance > 500.f) continue;
+        read_enemy_hitboxes(e);
         frame_enemies.push_back(e);
     }
 
@@ -317,7 +325,7 @@ void visuals::draw() {
             static long long straddle_log = 0;
             static unsigned straddles = 0;
             ++straddles;
-            for (enemy_frame& e : frame_enemies) read_enemy_pose(e);
+            for (enemy_frame& e : frame_enemies) { read_enemy_pose(e); read_enemy_hitboxes(e); }
             Cameras.front().view = view_after;
             Cameras.front().projection = proj_after;
             if (diag::every(straddle_log, 10000))
@@ -445,6 +453,19 @@ void visuals::draw() {
         if (mx.x < -64.f || mn.x > g_sw + 64.f || mx.y < -64.f || mn.y > g_sh + 64.f) continue;
         items.push_back({mn, mx, cx, &Enemy});
     }
+    // Hitbox wireframes: their own loop, so they do not depend on the 2D box
+    // projecting (it can fail while the body is on screen) and carry no
+    // distance fade. Drawn under the boxes.
+    if (cfg::esp::hitbox) {
+        ImDrawList* dl = ImGui::GetBackgroundDrawList();
+        const ImU32 outline = IM_COL32(0, 0, 0, 190);
+        const ImU32 body_col = hb_color(cfg::esp::box_col, 1.f);
+        const ImU32 head_col = IM_COL32(255, 230, 80, 255);
+        for (const enemy_frame& Enemy : frame_enemies)
+            for (const hitbox::WorldHitbox& hb : Enemy.hitboxes)
+                draw_hitbox(dl, hb, Enemy.hitbox_delta, ViewMatrix, ProjectionMatrix,
+                            hb.bone == hitbox::kHeadBone ? head_col : body_col, outline);
+    }
     // Far first, near last: the closest player is never covered by another box.
     std::sort(items.begin(), items.end(),
               [](const draw_item& l, const draw_item& r) { return l.e->distance > r.e->distance; });
@@ -454,15 +475,6 @@ void visuals::draw() {
         // Distant players fade a little so the close ones stand out.
         const float fade = 1.f - 0.4f * std::clamp((Enemy.distance - 40.f) / 110.f, 0.f, 1.f);
         const float text_sz = std::clamp(box_h * 0.11f, 11.f, 16.f);
-        if (cfg::esp::hitbox && !Enemy.hitboxes.empty()) {
-            ImDrawList* dl = ImGui::GetBackgroundDrawList();
-            const ImU32 outline = IM_COL32(0, 0, 0, int(190.f * fade));
-            const ImU32 body_col = hb_color(cfg::esp::box_col, fade);
-            const ImU32 head_col = IM_COL32(255, 230, 80, int(255.f * fade));
-            for (const hitbox::WorldHitbox& hb : Enemy.hitboxes)
-                draw_hitbox(dl, hb, Enemy.hitbox_delta, ViewMatrix, ProjectionMatrix,
-                            hb.bone == hitbox::kHeadBone ? head_col : body_col, outline);
-        }
         if (cfg::esp::box) dbox(it.min, it.max, fade);
         if (cfg::esp::health) dhp(Enemy.hp, Enemy.max_hp, it.min, it.max, fade);
         if (cfg::esp::name) {

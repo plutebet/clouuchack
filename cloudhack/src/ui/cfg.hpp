@@ -22,6 +22,8 @@ namespace esp {
     inline bool health = true;
     inline bool weapon = true;
     inline bool hitbox = false;
+    // Hitboxes are read and drawn only for enemies this close to the local player, metres.
+    inline float hitbox_range = 25.f;
     inline int box_type = 0;
     inline float box_rounding = 0.f;
     // Interpolate enemy positions between game frames (one game frame of

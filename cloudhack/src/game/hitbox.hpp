@@ -89,6 +89,12 @@ namespace hitbox {
         return ok(s.radius, 0.001f, 2.f) && ok(s.height, 0.001f, 5.f) && s.direction >= 0 && s.direction <= 2;
     }
 
+    // Range gate for reading/drawing a player's hitboxes. A non-finite or negative
+    // distance (failed pose) is never in range.
+    inline bool within_range(float distance, float range) noexcept {
+        return std::isfinite(distance) && distance >= 0.f && distance <= range;
+    }
+
     inline float distance3(const Vector3& a, const Vector3& b) noexcept {
         const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
         return std::sqrt(dx * dx + dy * dy + dz * dz);
