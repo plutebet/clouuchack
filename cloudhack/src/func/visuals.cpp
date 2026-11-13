@@ -478,11 +478,6 @@ void visuals::dbox(const ImVec2& t, const ImVec2& b, float a) {
     const ImU32 col = rgba(cfg::esp::box_col, a);
     const ImU32 border = black(0.78f * a);
 
-    // Soft inner shade: transparent at the head, darker at the feet.
-    if (x2 - x1 > 4.f && y2 - y1 > 4.f)
-        dl->AddRectFilledMultiColor(ImVec2(x1 + 1.f, y1 + 1.f), ImVec2(x2, y2),
-                                    black(0.02f * a), black(0.02f * a), black(0.14f * a), black(0.14f * a));
-
     if (cfg::esp::box_type == 0) {
         dl->AddRect(ImVec2(x1 - 1.f, y1 - 1.f), ImVec2(x2 + 2.f, y2 + 2.f), border, 0.f, 0, 1.f);
         dl->AddRect(ImVec2(x1 + 1.f, y1 + 1.f), ImVec2(x2, y2), border, 0.f, 0, 1.f);
