@@ -49,9 +49,7 @@ namespace ui::menu {
 
         // Panel size in px. Base width 330 px, base height 62 px + 910 px per unit of scale_y.
         float panel_w(float sx, float k) { return ImMin(330.f * k * sx, g_sw - 16.f * k); }
-        // Scalable part of the panel: eight toggle rows, colour row, button.
-        constexpr float kPanelBody = 636.f;
-        float panel_h(float sy, float k) { return 62.f * k + kPanelBody * k * sy; }
+        float panel_h(float sy, float k) { return 62.f * k + 380.f * k * sy; }
         // Keeps the whole panel inside the screen with an 8 px margin.
         ImVec2 clamp_panel(ImVec2 q, float w, float h, float k) {
             q.x = ImClamp(q.x, 8.f * k, ImMax(8.f * k, g_sw - 8.f * k - w));
@@ -296,7 +294,7 @@ namespace ui::menu {
                 if (io.MouseDown[0]) {
                     const float dx = mp.x - g_resize_press.x, dy = mp.y - g_resize_press.y;
                     const float max_sx = ImMax(1.f, ImMin(2.5f, (g_sw - 16.f * k) / (330.f * k)));
-                    const float max_sy = ImMax(1.f, ImMin(2.5f, (g_sh - 16.f * k - 62.f * k) / (kPanelBody * k)));
+                    const float max_sy = ImMax(1.f, ImMin(2.5f, (g_sh - 16.f * k - 62.f * k) / (380.f * k)));
                     cfg::menu::scale_x = ImClamp(g_resize_sx0 * (g_resize_w0 + dx) / g_resize_w0, 1.f, max_sx);
                     cfg::menu::scale_y = ImClamp(g_resize_sy0 * (g_resize_h0 + dy) / g_resize_h0, 1.f, max_sy);
                 } else {
@@ -349,13 +347,9 @@ namespace ui::menu {
         struct item { const char* name; bool* value; };
         const item items[] = {
             {"Box", &cfg::esp::box},
-            {"Corner", &cfg::esp::corner},
             {"Name", &cfg::esp::name},
             {"Health", &cfg::esp::health},
             {"Weapon", &cfg::esp::weapon},
-            {"Distance", &cfg::esp::distance},
-            {"Stance", &cfg::esp::stance},
-            {"Arrows", &cfg::esp::arrows},
         };
         for (const item& it : items) {
             bool v = *it.value;

@@ -21,10 +21,7 @@ namespace esp {
     inline bool name = false;
     inline bool health = true;
     inline bool weapon = true;
-    inline bool distance = true;   // "24m" under the weapon icon
-    inline bool stance = true;     // CROUCH / JUMP tag beside the box
-    inline bool arrows = true;     // arrows at the screen edge for enemies out of view
-    inline bool corner = false;    // corner-style box instead of the full outline
+    inline int box_type = 0;
     inline float box_rounding = 0.f;
     // Interpolate enemy positions between game frames (one game frame of
     // delay, no stepping when the overlay runs faster than the game).
