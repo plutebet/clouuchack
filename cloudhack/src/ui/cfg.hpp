@@ -21,7 +21,8 @@ namespace esp {
     inline bool name = false;
     inline bool health = true;
     inline bool weapon = true;
-    inline int box_type = 0;
+    // Off until switched on in the menu: the corner box is a different look.
+    inline bool corner = false;     // corner-style box instead of the full outline
     inline float box_rounding = 0.f;
     // Interpolate enemy positions between game frames (one game frame of
     // delay, no stepping when the overlay runs faster than the game).

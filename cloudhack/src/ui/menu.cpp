@@ -1,6 +1,6 @@
 // ================================================================================
 // cloudhack menu: a compact panel anchored under the watermark.
-//   Box / Name / Health / Weapon - toggle switches
+//   Box / Corner / Name / Health / Weapon - toggle switches
 //   Color                                   - one ESP colour (box, health bar)
 //   unload                                  - clean shutdown through status::g_quit_request
 // Panel: tap a control = release without moving; press + move = drag the panel.
@@ -47,9 +47,11 @@ namespace ui::menu {
         float g_resize_sx0 = 1.f, g_resize_sy0 = 1.f, g_resize_w0 = 1.f, g_resize_h0 = 1.f;
         ImVec2 g_grip_min, g_grip_max;         // resize grip of this frame; taps starting there are ignored
 
-        // Panel size in px. Base width 330 px, base height 62 px + 910 px per unit of scale_y.
+        // Toggle rows of the panel (see render()); the panel height follows from it.
+        constexpr int kToggleRows = 5;
+        // Panel size in px. Base width 330 px; height 50 px + the rows (toggles, colour row, button) times scale_y.
         float panel_w(float sx, float k) { return ImMin(330.f * k * sx, g_sw - 16.f * k); }
-        float panel_h(float sy, float k) { return 62.f * k + 380.f * k * sy; }
+        float panel_h(float sy, float k) { return 50.f * k + (64.f * kToggleRows + 72.f + 64.f) * k * sy; }
         // Keeps the whole panel inside the screen with an 8 px margin.
         ImVec2 clamp_panel(ImVec2 q, float w, float h, float k) {
             q.x = ImClamp(q.x, 8.f * k, ImMax(8.f * k, g_sw - 8.f * k - w));
@@ -294,7 +296,7 @@ namespace ui::menu {
                 if (io.MouseDown[0]) {
                     const float dx = mp.x - g_resize_press.x, dy = mp.y - g_resize_press.y;
                     const float max_sx = ImMax(1.f, ImMin(2.5f, (g_sw - 16.f * k) / (330.f * k)));
-                    const float max_sy = ImMax(1.f, ImMin(2.5f, (g_sh - 16.f * k - 62.f * k) / (380.f * k)));
+                    const float max_sy = ImMax(1.f, ImMin(2.5f, (g_sh - 16.f * k - 50.f * k) / ((64.f * kToggleRows + 136.f) * k)));
                     cfg::menu::scale_x = ImClamp(g_resize_sx0 * (g_resize_w0 + dx) / g_resize_w0, 1.f, max_sx);
                     cfg::menu::scale_y = ImClamp(g_resize_sy0 * (g_resize_h0 + dy) / g_resize_h0, 1.f, max_sy);
                 } else {
@@ -347,10 +349,12 @@ namespace ui::menu {
         struct item { const char* name; bool* value; };
         const item items[] = {
             {"Box", &cfg::esp::box},
+            {"Corner", &cfg::esp::corner},
             {"Name", &cfg::esp::name},
             {"Health", &cfg::esp::health},
             {"Weapon", &cfg::esp::weapon},
         };
+        static_assert(sizeof(items) / sizeof(items[0]) == kToggleRows, "kToggleRows must match the toggle rows");
         for (const item& it : items) {
             bool v = *it.value;
             if (toggle_row(dl, it.name, &v, c, cw, row, a, k) && interactive) *it.value = v;
