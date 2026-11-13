@@ -162,7 +162,7 @@ void visuals::draw() {
     if (Players.empty()) { esp_wait("player discovery / registry scan"); return; }
     const long long now_ms = diag::now_ms();
     const long long now_us = diag::now_us();
-    hitbox::begin_frame();
+    if (cfg::esp::hitbox) hitbox::begin_frame();
 
     // Per-object caches must not outlive the match: a new match reuses heap
     // addresses, and a stale "dead since" entry would hide a live player.
