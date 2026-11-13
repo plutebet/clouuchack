@@ -21,11 +21,10 @@ namespace esp {
     inline bool name = false;
     inline bool health = true;
     inline bool weapon = true;
-    // The three below add elements the ESP did not draw before, so they stay
-    // off until they are switched on in the menu.
-    inline bool distance = false;   // "23m" under the box / next to an arrow
-    inline bool arrows = false;     // direction arrows for enemies outside the view
-    inline bool corner = false;     // corner-style box instead of the full outline
+    inline bool distance = true;   // "24m" under the weapon icon
+    inline bool stance = true;     // CROUCH / JUMP tag beside the box
+    inline bool arrows = true;     // arrows at the screen edge for enemies out of view
+    inline int box_type = 0;
     inline float box_rounding = 0.f;
     // Interpolate enemy positions between game frames (one game frame of
     // delay, no stepping when the overlay runs faster than the game).
