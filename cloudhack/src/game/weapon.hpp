@@ -75,8 +75,6 @@ namespace weapon {
     struct player_weapon {
         uint64_t part{0};        // uyg
         int id{-1};              // WeaponId.Raw, -1 = unknown
-        int crouch{-1};          // NavigationContext.IsCrouch, -1 = unknown
-        int jump{-1};            // NavigationContext.IsJump, -1 = unknown
         long long part_checked_ms{0};
         long long id_read_ms{0};
     };
@@ -168,39 +166,11 @@ namespace weapon {
                 w.id_read_ms = 0;
             }
         }
-        if (!w.part) { w.crouch = w.jump = -1; return -1; }
+        if (!w.part) return -1;
         if (now - w.id_read_ms >= 100) {
             w.id_read_ms = now;
-            // One read covers NavigationContext (+0x50) and ActiveWeapon (+0x80).
-            uint8_t block[v100::weapon_part_active + 8 - v100::weapon_part_nav]{};
-            if (mem_read(w.part + v100::weapon_part_nav, block, sizeof(block))) {
-                uint64_t active = 0;
-                std::memcpy(&active, block + (v100::weapon_part_active - v100::weapon_part_nav), 8);
-                w.id = read_weapon_id(active);
-                const int crouch = block[0] <= 1 ? block[0] : -1;
-                const int jump = block[1] <= 1 ? block[1] : -1;
-                if (crouch != w.crouch || jump != w.jump) {
-                    static long long last_log = 0;
-                    if (diag::every(last_log, 1000))
-                        diag::log("STANCE", "player=0x%llx crouch=%d jump=%d", (unsigned long long)p.object, crouch, jump);
-                }
-                w.crouch = crouch;
-                w.jump = jump;
-            } else {
-                w.id = -1;
-                w.crouch = w.jump = -1;
-            }
+            w.id = read_weapon_id(rpm<uint64_t>(w.part + v100::weapon_part_active));
         }
         return w.id;
-    }
-
-    // Stance from the last active_id() read: 1 crouching, 2 in the air, 0 standing, -1 unknown.
-    inline int stance(uint64_t object) {
-        const auto it = g_players.find(object);
-        if (it == g_players.end()) return -1;
-        if (it->second.jump == 1) return 2;
-        if (it->second.crouch == 1) return 1;
-        if (it->second.crouch == 0) return 0;
-        return -1;
     }
 }
