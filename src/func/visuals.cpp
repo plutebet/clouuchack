@@ -198,24 +198,36 @@ void visuals::draw() {
     if (Cameras.empty()) { g_camera = 0; esp_wait("camera resolution (controller / bor / transform)"); return; }
     // The synthetic sources (bor with FOV 60, vqn, ios-transform) are only
     // approximations; ios-transform in particular can project far off the
-    // model. Once the real camera was locked in this match, a short loss of
-    // the lock (it re-acquires within 250 ms when the camera still exists)
-    // hides the boxes instead of drawing them in the wrong place. After 2 s
-    // without the lock the synthetic fallback is used as before.
+    // model, and none of them follows the scope FOV. The boxes are hidden
+    // instead of drawn through them:
+    //  - after a lock loss in this round, for 2 s while it is re-acquired;
+    //  - at the start of a round (new local NetObject) until the real
+    //    camera is locked, up to 3 s (log 20261114-175419: 1.2 s of boxes
+    //    through main-bor/ios-transform at FOV 60 while scoped at FOV 20).
+    // After that the synthetic fallback is used as before.
     {
         static long long last_native_ms = 0;
-        static uint64_t native_match = 0;
+        static uint64_t native_round = 0;
+        static uint64_t round_player = 0;
+        static long long round_start_ms = 0;
+        if (round_player != LocalPlayer) { round_player = LocalPlayer; round_start_ms = now_ms; }
         if (Cameras.front().kind == camera_kind_main_native) {
             last_native_ms = now_ms;
-            native_match = LocalPlayer;
-        } else if (native_match == LocalPlayer && now_ms - last_native_ms < 2000) {
-            static long long hold_log = 0;
-            if (diag::every(hold_log, 1000))
-                diag::log("CAMERA", "native camera lost %lld ms ago: ESP hidden while re-acquiring (best fallback=%s)",
-                          now_ms - last_native_ms, camera_kind_name(Cameras.front().kind));
-            g_camera = 0;
-            esp_wait("re-acquiring native camera");
-            return;
+            native_round = LocalPlayer;
+        } else {
+            const bool reacquiring = native_round == LocalPlayer && now_ms - last_native_ms < 2000;
+            const bool starting = native_round != LocalPlayer && now_ms - round_start_ms < 3000;
+            if (reacquiring || starting) {
+                static long long hold_log = 0;
+                if (diag::every(hold_log, 1000))
+                    diag::log("CAMERA", "%s: ESP hidden until the native camera is locked (best fallback=%s, %lld ms)",
+                              reacquiring ? "native camera lost" : "round start",
+                              camera_kind_name(Cameras.front().kind),
+                              reacquiring ? now_ms - last_native_ms : now_ms - round_start_ms);
+                g_camera = 0;
+                esp_wait("waiting for the native camera");
+                return;
+            }
         }
     }
 

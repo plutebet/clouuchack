@@ -89,23 +89,85 @@ namespace player {
         return true;
     }
 
+    // Native Transform layouts known for this build profile, best first.
+    inline constexpr TransformLayout k_profile_layout{
+        int(v100::transform_hierarchy), int(v100::transform_index),
+        int(v100::hierarchy_entries), int(v100::hierarchy_parents), -1};
+    inline constexpr TransformLayout k_legacy_layout{0x38, 0x40, 0x18, 0x20, -1};
+
+    inline bool same_layout(const TransformLayout& a, const TransformLayout& b) noexcept {
+        return a.data_offset == b.data_offset && a.index_offset == b.index_offset &&
+               a.entries_offset == b.entries_offset && a.parents_offset == b.parents_offset;
+    }
+    inline bool known_layout(const TransformLayout& l) noexcept {
+        return same_layout(l, k_profile_layout) || same_layout(l, k_legacy_layout);
+    }
+    inline bool decode_with(uint64_t native, const TransformLayout& l, Vector3& out) noexcept {
+        return l.data_offset >= 0 &&
+               decode_transform(native, l.data_offset, l.index_offset, l.entries_offset, l.parents_offset, out);
+    }
+    inline bool non_degenerate(const Vector3& p) noexcept {
+        return !(std::fabs(p.x) <= .001f && std::fabs(p.y) <= .001f && std::fabs(p.z) <= .001f);
+    }
+
+    // Brute-force search state. A candidate found by the search is only used
+    // after it also decodes a second, different Transform: on device log
+    // 20261114-174208 the search took the first plausible hit, garbage at
+    // data=+0x20 (pos 1.000 0.000 0.027), kept it for the whole session and
+    // the ESP never drew a frame.
+    struct layout_search {
+        TransformLayout candidate{};
+        uint64_t candidate_native{0};
+        long long known_fail_since{0};
+        long long last_search{0};
+    };
+    inline layout_search g_layout_search;
+    inline unsigned g_pose_fail_streak = 0;
+
     inline bool native_transform_position(uint64_t native, Vector3& out) noexcept {
         if (g_transform_layout.pid != proc::pid) {
             g_transform_layout = {};
             g_transform_layout.pid = proc::pid;
+            g_layout_search = {};
         }
-        if (g_transform_layout.data_offset >= 0 &&
-            decode_transform(native, g_transform_layout.data_offset, g_transform_layout.index_offset,
-                             g_transform_layout.entries_offset, g_transform_layout.parents_offset, out)) return true;
-        if (decode_transform(native, 0x38, 0x40, 0x18, 0x20, out)) {
-            g_transform_layout = {0x38, 0x40, 0x18, 0x20, proc::pid};
+        if (decode_with(native, g_transform_layout, out)) return true;
+
+        // The profile layout first, then the older Unity one. Either one
+        // working replaces whatever was active, including a searched layout.
+        for (const TransformLayout& known : {k_profile_layout, k_legacy_layout}) {
+            if (!decode_with(native, known, out)) continue;
+            if (!same_layout(g_transform_layout, known))
+                diag::log("INFO", "Unity Transform layout %s data=+0x%x index=+0x%x entries=+0x%x parents=+0x%x",
+                          same_layout(known, k_profile_layout) ? "profile" : "legacy",
+                          known.data_offset, known.index_offset, known.entries_offset, known.parents_offset);
+            g_transform_layout = known;
+            g_transform_layout.pid = proc::pid;
+            g_layout_search.known_fail_since = 0;
+            g_layout_search.candidate = {};
             return true;
         }
 
+        layout_search& ls = g_layout_search;
+        if (ls.candidate.data_offset >= 0 && native != ls.candidate_native &&
+            decode_with(native, ls.candidate, out) && non_degenerate(out)) {
+            g_transform_layout = ls.candidate;
+            g_transform_layout.pid = proc::pid;
+            diag::log("INFO", "Unity Transform layout confirmed on a second transform data=+0x%x index=+0x%x entries=+0x%x parents=+0x%x pos=(%.3f %.3f %.3f)",
+                      ls.candidate.data_offset, ls.candidate.index_offset, ls.candidate.entries_offset,
+                      ls.candidate.parents_offset, out.x, out.y, out.z);
+            ls.candidate = {};
+            return true;
+        }
+
+        // Transforms of a player that is still spawning do not decode with
+        // any layout. Search only after the known layouts failed for 5 s,
+        // and at most every 5 s (the search runs on the render thread).
         const long long now = diag::now_ms();
-        if (now - g_last_layout_probe < 1000) return false;
-        g_last_layout_probe = now;
-        diag::log("PROBE", "probing Unity 6 Transform layout native=0x%llx", (unsigned long long)native);
+        if (!ls.known_fail_since) ls.known_fail_since = now;
+        if (now - ls.known_fail_since < 5000 || now - ls.last_search < 5000) return false;
+        ls.last_search = now;
+        diag::log("PROBE", "known Transform layouts fail for %lld ms; searching native=0x%llx",
+                  now - ls.known_fail_since, (unsigned long long)native);
         for (int data_offset = 0x10; data_offset <= 0xF8; data_offset += 8) {
             uint64_t data = rpm<uint64_t>(native + uint64_t(data_offset));
             if (!plausible(data)) continue;
@@ -121,20 +183,18 @@ namespace player {
                         Vector3 candidate{};
                         if (!decode_transform(native, data_offset, index_offset,
                                               entries_i * 8, parents_i * 8, candidate)) continue;
-                        if (std::fabs(candidate.x) <= .001f && std::fabs(candidate.y) <= .001f &&
-                            std::fabs(candidate.z) <= .001f) continue;
-                        g_transform_layout = {data_offset, index_offset, entries_i * 8,
-                                              parents_i * 8, proc::pid};
-                        out = candidate;
-                        diag::log("INFO", "Unity Transform layout found data=+0x%x index=+0x%x entries=+0x%x parents=+0x%x pos=(%.3f %.3f %.3f)",
+                        if (!non_degenerate(candidate)) continue;
+                        ls.candidate = {data_offset, index_offset, entries_i * 8, parents_i * 8, proc::pid};
+                        ls.candidate_native = native;
+                        diag::log("PROBE", "Transform layout candidate data=+0x%x index=+0x%x entries=+0x%x parents=+0x%x pos=(%.3f %.3f %.3f), waiting for a second transform",
                                   data_offset, index_offset, entries_i * 8, parents_i * 8,
-                                  out.x, out.y, out.z);
-                        return true;
+                                  candidate.x, candidate.y, candidate.z);
+                        return false;
                     }
                 }
             }
         }
-        diag::log("WARN", "Unity Transform layout probe found no valid hierarchy");
+        diag::log("WARN", "Unity Transform layout search found no valid hierarchy");
         return false;
     }
 
@@ -460,17 +520,25 @@ namespace player {
         if (!obj_ptr(managed)) return false;
         const uint64_t native = rpm<uint64_t>(managed + v100::unity_cached_ptr);
         if (!obj_ptr(native)) return false;
-        if (g_transform_layout.pid != proc::pid || g_transform_layout.data_offset < 0) {
+        // Header of the hierarchy under a layout; false when it does not
+        // look like one. A failure under the active layout re-runs the
+        // known layouts once (self-heal after a wrong searched layout).
+        uint64_t data = 0, entries = 0, parents = 0;
+        int index = -1;
+        auto read_header = [&](const TransformLayout& layout) {
+            if (layout.data_offset < 0) return false;
+            data = rpm<uint64_t>(native + uint64_t(layout.data_offset));
+            index = rpm<int>(native + uint64_t(layout.index_offset));
+            if (!obj_ptr(data) || index < 0 || index > 8192) return false;
+            entries = rpm<uint64_t>(data + uint64_t(layout.entries_offset));
+            parents = rpm<uint64_t>(data + uint64_t(layout.parents_offset));
+            return obj_ptr(entries) && obj_ptr(parents) && entries != parents;
+        };
+        if (g_transform_layout.pid != proc::pid || !read_header(g_transform_layout)) {
             Vector3 probe{};
-            if (!native_transform_position(native, probe)) return false; // runs the layout probe
+            if (!native_transform_position(native, probe)) return false;
+            if (!read_header(g_transform_layout)) return false;
         }
-        const auto& layout = g_transform_layout;
-        const uint64_t data = rpm<uint64_t>(native + uint64_t(layout.data_offset));
-        const int index = rpm<int>(native + uint64_t(layout.index_offset));
-        if (!plausible(data) || index < 0 || index > 8192) return false;
-        const uint64_t entries = rpm<uint64_t>(data + uint64_t(layout.entries_offset));
-        const uint64_t parents = rpm<uint64_t>(data + uint64_t(layout.parents_offset));
-        if (!plausible(entries) || !plausible(parents) || entries == parents) return false;
         ref.native = native;
         ref.data = data;
         ref.entries = entries;
@@ -622,11 +690,20 @@ namespace player {
             if (found && (!pose_jumped(entry, candidate.feet) || attempt == 1)) {
                 entry.last_feet = candidate.feet;
                 entry.has_last = true;
+                g_pose_fail_streak = 0;
                 return candidate;
             }
             if (!revalidate(p, entry)) break;
         }
         entry.has_last = false;
+        // A searched (non-profile) layout that yields no pose for many calls
+        // in a row is wrong: drop it so the known layouts are tried again.
+        if (++g_pose_fail_streak >= 60 && g_transform_layout.data_offset >= 0 && !known_layout(g_transform_layout)) {
+            diag::log("WARN", "searched Transform layout data=+0x%x index=+0x%x yields no poses; dropping it",
+                      g_transform_layout.data_offset, g_transform_layout.index_offset);
+            g_transform_layout = {};
+            g_pose_fail_streak = 0;
+        }
         return out;
     }
 
@@ -794,6 +871,7 @@ namespace player {
             if (fast && pose_from_points(points, entry.count, candidate) && !pose_jumped(entry, candidate.feet)) {
                 entry.last_feet = candidate.feet;
                 entry.has_last = true;
+                g_pose_fail_streak = 0;
                 fp.pose = candidate;
                 continue;
             }

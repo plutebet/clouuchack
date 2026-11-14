@@ -101,6 +101,16 @@ namespace v100 {
     inline constexpr uint64_t transform_b = 0x30;           // mtc.<mpwq> Transform
     inline constexpr uint64_t model_transform = 0x20;       // bis.<dcul> Transform
     inline constexpr uint64_t unity_cached_ptr = 0x10;      // UnityEngine.Object.m_CachedPtr
+    // Native Transform -> TransformHierarchy (Unity 6000.3, this libunity).
+    // Measured, not from dump.cs: the runtime layout search found exactly
+    // these values in 5 device sessions on Infinix X6873 (logs 20261114-151113,
+    // -155757, -175231/default, -175419 and an earlier default log), each
+    // with plausible world positions. The older 0x38/0x40 layout never
+    // decoded on this build.
+    inline constexpr uint64_t transform_hierarchy = 0x28;   // native Transform: TransformHierarchy*
+    inline constexpr uint64_t transform_index = 0x10;       // native Transform: index in the hierarchy (int)
+    inline constexpr uint64_t hierarchy_entries = 0x18;     // TransformHierarchy: TRS entries (48 bytes each)
+    inline constexpr uint64_t hierarchy_parents = 0x20;     // TransformHierarchy: parent indices (int32)
     inline constexpr uint64_t camera_view = 0x70;           // native Camera worldToCamera (observed, pattern-verified at runtime)
     inline constexpr uint64_t camera_projection = 0xB0;     // native Camera projection (observed, pattern-verified at runtime)
     inline constexpr uint64_t presentation_animation_data = 0xA0; // chc.whjb : PlayerAnimationData
@@ -472,6 +482,10 @@ namespace scanner {
     // the scanner only re-passes when the registry is missing: a full pass
     // reads ~4 GiB on this game and must not run every 15 s for nothing.
     inline std::atomic<bool> g_want_more{true};
+    // Set by the render thread while it has no usable registry (invalid, or
+    // no local player for a long time); the scanner's own result list can
+    // still hold the stale registry, so it cannot tell by itself.
+    inline std::atomic<bool> g_need_registry{false};
     // Bumped by the render thread when the local player changes (new match,
     // new round object). Resets the pass back-off and restarts a running pass
     // so the new match's camera and registry are found from the start.
@@ -679,9 +693,15 @@ namespace scanner {
             if (registry_known && idle_passes > 0) interval = std::min<long long>(30000, 15000LL << std::min<unsigned>(idle_passes, 1));
             // A new match with no camera lock scans at once; a requested
             // rescan (lock lost, registry gone) waits 3 s after the last pass.
-            const bool due = (new_match && (essential_missing || g_want_more)) ||
+            // A rescan request is dropped once its reason is gone: requests
+            // made while a pass was running used to start one more full pass
+            // after the camera and registry were already found (log
+            // 20261114-175419, pass 5: 7 s, 1.46 GiB for nothing).
+            const bool needed = essential_missing || g_want_more || g_need_registry;
+            if (g_rescan && !needed) g_rescan = false;
+            const bool due = (new_match && needed) ||
                              (g_rescan && since_pass > 3000) ||
-                             ((essential_missing || g_want_more) && since_pass > interval);
+                             (needed && since_pass > interval);
             if (!due) {
                 sleep_ms(100);
                 continue;
@@ -749,6 +769,7 @@ inline bool registry_ready() {
     if (!registry_class || !store_class) return false;
     if (validate_registry(g_registry, registry_class, store_class)) return true;
     g_registry = 0;
+    scanner::g_need_registry = true;
     const scanner::results snap = scanner::snapshot();
     if (snap.pid == proc::pid && snap.lib == proc::lib &&
         validate_registry(snap.registry, registry_class, store_class)) {
@@ -896,6 +917,7 @@ inline void switch_to_live_registry(uint64_t player_class, long long no_local_ms
     // Between rounds the registry has no local player for 1-2 s (log
     // 20261114-155757: rescan at +0 s, new local player at +1.5 s, same
     // registry). Only a long absence means the registry itself is stale.
+    if (no_local_ms >= 8000) scanner::g_need_registry = true;
     if (no_local_ms >= 8000 && diag::every(last_request, 30000)) {
         diag::log("INFO", "registry 0x%llx has no local player for %lld ms and no other candidate holds one: rescan",
                   (unsigned long long)g_registry, no_local_ms);
@@ -913,6 +935,7 @@ inline std::vector<player_snapshot> players() {
         diag::log("WARN", "registry became invalid playerClass=0x%llx count=%d",
                   (unsigned long long)player_class, count);
         g_registry = 0;
+        scanner::g_need_registry = true;
         scanner::request_rescan();
         return out;
     }
@@ -920,6 +943,7 @@ inline std::vector<player_snapshot> players() {
     const long long now = diag::now_ms();
     if (has_local_player(current)) {
         no_local_since = 0;
+        scanner::g_need_registry = false;
     } else {
         if (!no_local_since) no_local_since = now;
         if (now - no_local_since > 1000) {

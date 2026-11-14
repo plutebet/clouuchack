@@ -263,6 +263,9 @@ namespace cam {
             std::memcpy(&m, buf + off, sizeof(m));
             const projection_info info = projection_params(m);
             if (info.fov < 5.f || info.fov > 150.f) continue;
+            // A gameplay perspective has a positive aspect and 0 < near < far
+            // (log 20261114-175419 matched aspect=-1.50 far=-0 at +0x5f0).
+            if (!(info.aspect > 0.5f && info.near_plane > 0.f && info.far_plane > info.near_plane)) continue;
             float fov_penalty = 0.f;
             if (!projection_fov_ok(info.fov, pose.fov, arms_fov, fov_penalty)) continue; // arms camera
             float score = 0.f;

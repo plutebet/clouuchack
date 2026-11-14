@@ -13,6 +13,7 @@
 #include "other/status.hpp"
 #include "other/crash.hpp"
 #include "other/cpu_affinity.hpp"
+#include "other/frame_pacer.hpp"
 #include "game/game.hpp"
 #include "game/camera.hpp"
 #include "func/visuals.hpp"
@@ -243,17 +244,10 @@ static int run_overlay(const options& opts) {
     // vsync in steady state. Sleeping most of the period and reading the
     // game memory as late as possible makes the boxes use coordinates that
     // are only a few ms old when SurfaceFlinger composes the frame.
-    double period_ms = 8.3, work_ms = 2.0, margin_ms = 2.5;
-    long long last_swap_us = diag::now_us();
-    unsigned frames = 0, missed = 0;
+    // Display period from calibration bursts only (see frame_pacer.hpp).
+    frame_pacer pacer;
     long long last_pace_report = diag::now_ms();
-    // Display period = median of the last 32 swap intervals (robust against
-    // missed vsyncs and against a wrong initial guess on 60/90/144 Hz panels).
-    double periods[32] = {0};
-    unsigned period_index = 0;
-    bool periods_full = false;
     unsigned swap_failures_seen = 0;
-    unsigned swap_streak = 0;
     unsigned skipped_reported = 0;
 
     int exit_code = exit_ok;
@@ -262,6 +256,7 @@ static int run_overlay(const options& opts) {
         crash::g_frame.fetch_add(1);
         beat(0);
         crash::stage("frame-begin");
+        pacer.begin_frame(diag::now_ms());
         drawBegin();
 
         crash::stage("process");
@@ -348,57 +343,23 @@ static int run_overlay(const options& opts) {
             }
         }
 
-        // eglSwapBuffers returns once the previous buffer was consumed at a
-        // vsync, so the interval between returns is the display period
-        // (8.3 ms at 120 Hz, 6.9 ms at 144 Hz). Sleep period - work - margin
-        // and read the game as late as possible; the margin adapts to the
-        // observed miss rate (a return after > 1.6 periods == missed vsync).
-        // A skipped present does not block on vsync, and after a run of
-        // skipped frames the buffer queue is empty, so the next two swaps
-        // return at once too. Only the third swap in a row and later measure
-        // the display period (log 20261114-155757 on a 144 Hz panel showed
-        // "periods" of 4.2-5.7 ms: the loop then ran faster than the display
-        // and the miss counter pushed the margin to its 5 ms cap).
-        work_ms = work_ms * 0.9 + double(before_swap_us - frame_start_us) / 1000.0 * 0.1;
-        const double swap_period = double(after_swap_us - last_swap_us) / 1000.0;
-        swap_streak = swapped ? swap_streak + 1 : 0;
-        const bool measured = swap_streak >= 3;
-        if (swapped) { last_swap_us = after_swap_us; ++frames; }
-        // 6.0 ms = 166 Hz, above any phone panel in use; 34 ms = 29 Hz.
-        if (measured && swap_period >= 6.0 && swap_period < 34.0) {
-            if (swap_period > period_ms * 1.6 && run) ++missed;
-            periods[period_index] = swap_period;
-            period_index = (period_index + 1) % 32;
-            if (period_index == 0) periods_full = true;
-            if (periods_full && period_index % 8 == 0) {
-                double sorted[32];
-                std::memcpy(sorted, periods, sizeof(sorted));
-                std::sort(sorted, sorted + 32);
-                period_ms = sorted[15];
-            }
-        }
+        pacer.after_present(swapped, before_swap_us - frame_start_us, after_swap_us, run);
         if (diag::now_ms() - last_pace_report > 2000) {
-            const double miss_rate = frames ? double(missed) / double(frames) : 0.0;
-            if (miss_rate > 0.03) margin_ms = std::min(5.0, margin_ms + 0.5);
-            else if (miss_rate < 0.005) margin_ms = std::max(1.5, margin_ms - 0.1);
+            const unsigned presented = pacer.frames, missed = pacer.missed;
+            pacer.end_window();
             const unsigned skipped_window = g_present_gate.skipped - skipped_reported;
             skipped_reported = g_present_gate.skipped;
             static long long pace_log = 0;
             if (run && diag::every(pace_log, 10000))
-                diag::log("PACE", "period=%.2fms work=%.2fms margin=%.1fms missed=%u/%u (last 2 s: presented=%u skipped=%u)",
-                          period_ms, work_ms, margin_ms, missed, frames, frames, skipped_window);
-            frames = missed = 0;
+                diag::log("PACE", "period=%.2fms work=%.2fms margin=%.1fms missed=%u/%u calibrations=%u (last 2 s: presented=%u skipped=%u)",
+                          pacer.period_ms, pacer.work_ms, pacer.margin_ms, missed, presented, pacer.calibrations,
+                          presented, skipped_window);
             last_pace_report = diag::now_ms();
         }
         crash::stage("sleep");
-        double sleep_ms = period_ms - work_ms - margin_ms;
-        // An open menu relies on the blocking swap for pacing; a skipped
-        // present did not block, so that frame sleeps the rest of the period
-        // itself (otherwise a static open menu would spin the loop).
-        if (ui::bar::g_open && swapped) sleep_ms = std::min(sleep_ms, 2.0);
-        if (!swapped) sleep_ms = std::max(1.0, period_ms - work_ms);
-        if (!run) sleep_ms = std::max(sleep_ms, 8.0);
-        if (sleep_ms > 0.3) usleep(useconds_t(sleep_ms * 1000.0));
+        const double sleep_ms = pacer.sleep_ms(swapped, ui::bar::g_open, run);
+        if (sleep_ms > 0.0) usleep(useconds_t(sleep_ms * 1000.0));
+        pacer.slept(sleep_ms);
     }
 
     crash::stage("shutdown");
