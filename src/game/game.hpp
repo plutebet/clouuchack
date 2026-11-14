@@ -191,8 +191,12 @@ inline void ensure_scan_context() {
 }
 
 inline bool plausible(uint64_t p) { return p >= 0x10000 && p < 0x0001000000000000ULL; }
+inline bool obj_ptr(uint64_t p);
+// Objects live above 4 GiB on this runtime; anything else is a field value,
+// not an object, and must not be read (the scanner's false registry matches
+// used to read junk such as 0x1d0000 on every pass).
 inline bool exact_class(uint64_t object, uint64_t klass) {
-    return object && klass && rpm<uint64_t>(object) == klass;
+    return klass && obj_ptr(object) && rpm<uint64_t>(object) == klass;
 }
 
 // Heap object pointers on this 64-bit runtime are always above 4 GiB; field
@@ -427,10 +431,12 @@ inline bool validate_registry(uint64_t candidate, uint64_t registry_class, uint6
     uint64_t store = rpm<uint64_t>(candidate + v100::registry_store);
     if (!exact_class(store, store_class)) return false;
     uint64_t list = rpm<uint64_t>(store + v100::store_objects);
+    if (!obj_ptr(list)) return false;
     int count = rpm<int>(list + v100::list_count);
     uint64_t array = rpm<uint64_t>(list + v100::list_items);
+    if (count < 0 || count > 4096 || !obj_ptr(array)) return false;
     uint64_t length = rpm<uint64_t>(array + v100::array_length);
-    return list && count >= 0 && count <= 4096 && (count == 0 || array) && length >= unsigned(count) && length <= 8192;
+    return length >= unsigned(count) && length <= 8192;
 }
 
 // ---------------------------------------------------------------------------
@@ -617,13 +623,27 @@ namespace scanner {
         ::setpriority(PRIO_PROCESS, static_cast<id_t>(::syscall(SYS_gettid)), 19);
         unsigned idle_passes = 0; // passes that found nothing new while the registry is known
         unsigned seen_epoch = g_match_epoch.load();
+        // The local NetObject changes every round, not only every match. The
+        // camera resolver re-locks from the existing camera list within a
+        // frame or two, so a round change only warrants a pass if something
+        // is still missing 1.5 s later. Before, every round (~20 s) started a
+        // 1.3 GiB pass: ~30% of a core and ~1300 process_vm_readv of 1 MiB
+        // against the game, with nothing new found.
+        bool settle_pending = false;
+        long long settle_until = 0;
         while (g_run) {
             const unsigned epoch = g_match_epoch.load();
-            const bool new_match = epoch != seen_epoch;
-            if (new_match) {
+            if (epoch != seen_epoch) {
                 seen_epoch = epoch;
                 idle_passes = 0;
-                diag::log("SCAN", "new match (local player changed): back-off reset");
+                settle_pending = true;
+                settle_until = diag::now_ms() + 1500;
+                diag::log("SCAN", "new round/match (local player changed): back-off reset, re-check in 1.5 s");
+            }
+            bool new_match = false;
+            if (settle_pending && diag::now_ms() >= settle_until) {
+                settle_pending = false;
+                new_match = true;
             }
             const int pid = proc::pid;
             const uint64_t lib = proc::lib;
@@ -805,11 +825,12 @@ inline int resolve_local_flag(const std::vector<player_snapshot>& objects) {
 inline bool read_registry_players(uint64_t registry, uint64_t player_class, std::vector<player_snapshot>& current, int& count) {
     current.clear();
     count = 0;
-    const uint64_t store = rpm<uint64_t>(registry + v100::registry_store);
-    const uint64_t list = rpm<uint64_t>(store + v100::store_objects);
+    const uint64_t store = obj_ptr(registry) ? rpm<uint64_t>(registry + v100::registry_store) : 0;
+    const uint64_t list = obj_ptr(store) ? rpm<uint64_t>(store + v100::store_objects) : 0;
+    if (!obj_ptr(list)) return false;
     count = rpm<int>(list + v100::list_count);
     const uint64_t array = rpm<uint64_t>(list + v100::list_items);
-    if (!player_class || count < 0 || count > 4096 || (count > 0 && !array)) return false;
+    if (!player_class || count < 0 || count > 4096 || (count > 0 && !obj_ptr(array))) return false;
     if (count == 0) return true;
     std::vector<uint64_t> items(size_t(count), 0);
     if (!mem_read(array + v100::array_data, items.data(), items.size() * 8)) return false;
@@ -853,7 +874,7 @@ inline bool has_local_player(const std::vector<player_snapshot>& objects) {
 // The registry in use holds no local player (old match kept alive, next
 // match started without going through the menu): switch to a registry the
 // scanner found that does hold one, or ask for a pass to find it.
-inline void switch_to_live_registry(uint64_t player_class) {
+inline void switch_to_live_registry(uint64_t player_class, long long no_local_ms) {
     static long long last_try = 0, last_request = 0;
     if (!diag::every(last_try, 1000)) return;
     const scanner::results snap = scanner::snapshot();
@@ -872,9 +893,12 @@ inline void switch_to_live_registry(uint64_t player_class) {
             return;
         }
     }
-    if (diag::every(last_request, 15000)) {
-        diag::log("INFO", "registry 0x%llx has no local player and no other candidate holds one: rescan",
-                  (unsigned long long)g_registry);
+    // Between rounds the registry has no local player for 1-2 s (log
+    // 20261114-155757: rescan at +0 s, new local player at +1.5 s, same
+    // registry). Only a long absence means the registry itself is stale.
+    if (no_local_ms >= 8000 && diag::every(last_request, 30000)) {
+        diag::log("INFO", "registry 0x%llx has no local player for %lld ms and no other candidate holds one: rescan",
+                  (unsigned long long)g_registry, no_local_ms);
         scanner::request_rescan();
     }
 }
@@ -900,7 +924,7 @@ inline std::vector<player_snapshot> players() {
         if (!no_local_since) no_local_since = now;
         if (now - no_local_since > 1000) {
             const uint64_t before = g_registry;
-            switch_to_live_registry(player_class);
+            switch_to_live_registry(player_class, now - no_local_since);
             if (g_registry != before && read_registry_players(g_registry, player_class, current, count) &&
                 has_local_player(current))
                 no_local_since = 0;

@@ -253,7 +253,7 @@ static int run_overlay(const options& opts) {
     unsigned period_index = 0;
     bool periods_full = false;
     unsigned swap_failures_seen = 0;
-    bool prev_swapped = false;
+    unsigned swap_streak = 0;
     unsigned skipped_reported = 0;
 
     int exit_code = exit_ok;
@@ -353,14 +353,19 @@ static int run_overlay(const options& opts) {
         // (8.3 ms at 120 Hz, 6.9 ms at 144 Hz). Sleep period - work - margin
         // and read the game as late as possible; the margin adapts to the
         // observed miss rate (a return after > 1.6 periods == missed vsync).
-        // A skipped present (frame identical to the screen) does not block
-        // on vsync, so only two swaps in a row measure the display period.
+        // A skipped present does not block on vsync, and after a run of
+        // skipped frames the buffer queue is empty, so the next two swaps
+        // return at once too. Only the third swap in a row and later measure
+        // the display period (log 20261114-155757 on a 144 Hz panel showed
+        // "periods" of 4.2-5.7 ms: the loop then ran faster than the display
+        // and the miss counter pushed the margin to its 5 ms cap).
         work_ms = work_ms * 0.9 + double(before_swap_us - frame_start_us) / 1000.0 * 0.1;
         const double swap_period = double(after_swap_us - last_swap_us) / 1000.0;
-        const bool measured = swapped && prev_swapped;
+        swap_streak = swapped ? swap_streak + 1 : 0;
+        const bool measured = swap_streak >= 3;
         if (swapped) { last_swap_us = after_swap_us; ++frames; }
-        prev_swapped = swapped;
-        if (measured && swap_period > 2.0 && swap_period < 50.0) {
+        // 6.0 ms = 166 Hz, above any phone panel in use; 34 ms = 29 Hz.
+        if (measured && swap_period >= 6.0 && swap_period < 34.0) {
             if (swap_period > period_ms * 1.6 && run) ++missed;
             periods[period_index] = swap_period;
             period_index = (period_index + 1) % 32;

@@ -66,6 +66,7 @@ namespace cam {
     inline main_chain g_chain_cache{};
     inline long long g_chain_cache_ms = 0;
     inline long long g_last_probe = 0;
+    inline long long g_unlocked_since_ms = 0;  // first frame without a native lock, 0 = locked
     inline long long g_last_chain_log = 0;
     inline long long g_last_lock_log = 0;
 
@@ -215,10 +216,16 @@ namespace cam {
     // pose; only the projection tells them apart. Measured on 1.1.0: the
     // MainCamera bor FOV follows the world camera (60, 20 when scoped) and
     // the ArmsCamera bor holds the arms camera's constant 40. Pure.
-    //   rejects a projection that has the arms FOV while the main FOV differs,
-    //   otherwise returns a penalty growing with the distance to the main FOV.
+    //   rejects a projection more than 10 degrees off the main FOV or with the
+    //   arms FOV while the main FOV differs, otherwise returns a penalty
+    //   growing with the distance to the main FOV.
     inline bool projection_fov_ok(float proj_fov, float main_fov, float arms_fov, float& penalty) {
         penalty = std::fabs(proj_fov - main_fov) * 2.f;
+        // A camera more than 10 degrees off the MainCamera FOV is not locked
+        // at all (log 20261114-155757: a FOV 90 camera at the eye pose was
+        // locked after a round start and dropped by the watchdog 600 ms later).
+        // During a scope animation this only delays the lock by a 250 ms probe.
+        if (std::fabs(proj_fov - main_fov) > 10.f) return false;
         const bool arms_known = arms_fov > 1.f && std::fabs(main_fov - arms_fov) > 2.f;
         if (arms_known && std::fabs(proj_fov - arms_fov) < 1.f && std::fabs(proj_fov - main_fov) > 1.f)
             return false;
@@ -335,7 +342,6 @@ namespace cam {
                       (unsigned long long)g_lock.managed, (unsigned long long)g_lock.native, why);
             g_lock = {};
             g_last_probe = 0;   // try to re-acquire on this very frame
-            scanner::request_rescan();
             return false;
         }
         // A camera 3 m away from the MainCamera state is not the gameplay
@@ -352,7 +358,6 @@ namespace cam {
                                   d, g_lock.mismatch_frames);
                         g_lock = {};
                         g_last_probe = 0;
-                        scanner::request_rescan();
                         return false;
                     }
                 } else {
@@ -468,17 +473,32 @@ namespace cam {
 
         camera_candidate native{};
         if (refresh_lock(chain, native)) {
+            g_unlocked_since_ms = 0;
             scanner::g_want_more = false;
             out.push_back(native);
             return out;
         }
         const bor_pose pose = read_bor(chain.main_bor);
         if (acquire_lock(chain, pose, native)) {
+            g_unlocked_since_ms = 0;
             scanner::g_want_more = false;
             out.push_back(native);
             return out;
         }
-        scanner::g_want_more = true;
+        // A dropped lock is re-acquired from the camera list the scanner
+        // already published (round start, scope, recoil). Only when that keeps
+        // failing for 1.5 s is the list stale (map change, recreated camera)
+        // and worth a heap pass.
+        const long long now_ms = diag::now_ms();
+        if (!g_unlocked_since_ms) g_unlocked_since_ms = now_ms;
+        if (now_ms - g_unlocked_since_ms >= 1500) {
+            scanner::g_want_more = true;
+            static long long last_rescan_request = 0;
+            if (diag::every(last_rescan_request, 10000)) {
+                diag::log("CAMERA", "no native camera for %lld ms: requesting a heap pass", now_ms - g_unlocked_since_ms);
+                scanner::request_rescan();
+            }
+        }
 
         camera_candidate synthetic{};
         if (chain.main_bor && player::synthetic_from_bor(chain.main_bor, camera_kind_main_state, synthetic))
