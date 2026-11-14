@@ -3,8 +3,9 @@
 //   double tap in the screen centre  -> open the menu (only while it is closed)
 //   ui::bar::close()                 -> close it (butterfly logo in the menu)
 // The centre is detected from the real overlay size and re-detected when the
-// surface size changes. After the first tap a faint ring marks the zone until
-// the double-tap window expires.
+// surface size changes. Both taps must land on the centre point itself (a
+// fingertip tolerance of 40 base px). After the first tap a small dot marks
+// the point until the double-tap window expires.
 // ================================================================================
 
 #include "bar.hpp"
@@ -28,13 +29,14 @@ namespace ui::bar {
         gesture::double_tap g_tap;
         gesture::center_zone g_zone;
 
-        void update_zone() {
+        void update_zone(float k) {
             const ImGuiIO& io = ImGui::GetIO();
             const float w = io.DisplaySize.x >= 2.f ? io.DisplaySize.x : g_sw;
             const float h = io.DisplaySize.y >= 2.f ? io.DisplaySize.y : g_sh;
-            if (g_zone.valid && g_zone.width == w && g_zone.height == h) return;
-            if (gesture::zone_from_display(w, h, g_zone))
-                diag::log("INFO", "menu open: screen centre detected at (%.0f, %.0f) radius=%.0f px, display %.0fx%.0f",
+            const float tolerance = 40.f * k;
+            if (g_zone.valid && g_zone.width == w && g_zone.height == h && g_zone.radius == tolerance) return;
+            if (gesture::zone_from_display(w, h, tolerance, g_zone))
+                diag::log("INFO", "menu open: screen centre point detected at (%.0f, %.0f) tolerance=%.0f px, display %.0fx%.0f",
                           g_zone.cx, g_zone.cy, g_zone.radius, w, h);
             else
                 diag::log("WARN", "menu open: display size %.0fx%.0f unusable, centre double tap disabled", w, h);
@@ -48,9 +50,7 @@ namespace ui::bar {
             const float a = left * g_game_alpha;
             if (a < 0.01f) return;
             ImDrawList* dl = ImGui::GetForegroundDrawList();
-            const ImVec2 c(g_zone.cx, g_zone.cy);
-            dl->AddCircle(c, g_zone.radius, IM_COL32(255, 255, 255, int(60 * a)), 64, 2.f * k);
-            dl->AddCircleFilled(c, 10.f * k, IM_COL32(59, 196, 111, int(200 * a)), 24);
+            dl->AddCircleFilled(ImVec2(g_zone.cx, g_zone.cy), 6.f * k, IM_COL32(59, 196, 111, int(200 * a)), 16);
         }
     }
 
@@ -65,9 +65,9 @@ namespace ui::bar {
         const float k = style::k();
         const float ct = float(ImGui::GetTime());
 
-        update_zone();
+        update_zone(k);
         g_tap.max_move_px = 24.f * k;
-        g_tap.max_pair_px = 80.f * k;
+        g_tap.max_pair_px = 2.f * g_zone.radius;
         const ImVec2 mp = io.MousePos;
         const bool on_panel = g_panel_visible && mp.x >= g_panel_min.x && mp.x <= g_panel_max.x &&
                               mp.y >= g_panel_min.y && mp.y <= g_panel_max.y;

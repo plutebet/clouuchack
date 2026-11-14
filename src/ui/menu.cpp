@@ -1,9 +1,9 @@
 // ================================================================================
 // cloudhack menu: sidebar layout.
-//   left:  butterfly logo (tap = close the menu), tabs "Visuals" and "Unload"
+//   left:  butterfly logo (tap = close the menu), "Visuals" tab,
+//          "Unload" (tap = unload at once through status::g_quit_request)
 //   right: Visuals - Box / Name / Health / Weapon / Smooth switches,
 //                    Box Style (Full / Corner), Color (HSV popup)
-//          Unload  - unload button (clean shutdown through status::g_quit_request)
 // Opens centred on the auto-detected screen centre (ui::bar). Press on the
 // panel and move = drag; a control fires on release without moving.
 // Everything is drawn on the foreground draw list; no ImGui windows.
@@ -18,6 +18,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "Android_draw/draw.h"
+#include "fonts/menu/butterfly.h"
 #include "../other/status.hpp"
 #include <cmath>
 #include <cfloat>
@@ -34,8 +35,6 @@ namespace ui::menu {
         const ImVec4 c_widget(0x2E / 255.f, 0x2E / 255.f, 0x2E / 255.f, 1.f);
         const ImVec4 c_track_off(0xD6 / 255.f, 0xD6 / 255.f, 0xD6 / 255.f, 1.f);
         const ImVec4 c_green(0x3B / 255.f, 0xC4 / 255.f, 0x6F / 255.f, 1.f);
-        const ImVec4 c_red(0xD9 / 255.f, 0x43 / 255.f, 0x4F / 255.f, 1.f);
-        const ImVec4 c_red_light(0xE8 / 255.f, 0x5C / 255.f, 0x67 / 255.f, 1.f);
         const ImVec4 c_text(0xE8 / 255.f, 0xE8 / 255.f, 0xE8 / 255.f, 1.f);
         const ImVec4 c_text_dim(0x9A / 255.f, 0x9A / 255.f, 0x9A / 255.f, 1.f);
         const ImVec4 c_white(1.f, 1.f, 1.f, 1.f);
@@ -44,9 +43,6 @@ namespace ui::menu {
         // Base sizes (px at k = 1).
         constexpr float k_panel_w = 720.f, k_panel_h = 636.f, k_sidebar_w = 200.f;
         constexpr float k_logo_h = 150.f, k_tab_h = 88.f, k_row = 76.f, k_pad = 28.f;
-
-        enum tab_id { tab_visuals = 0, tab_unload = 1 };
-        int g_tab = tab_visuals;
 
         float g_ma = 0.f;                 // menu alpha 0..1
         bool g_was_open = false;
@@ -109,8 +105,9 @@ namespace ui::menu {
             dl->AddConvexPolyFilled(pts, n, color);
         }
 
-        // Butterfly logo: white wings with dark veins, body and antennae.
-        void butterfly(ImDrawList* dl, const ImVec2& c, float s, float a, float k) {
+        // Fallback logo when the butterfly texture is unavailable: white wings
+        // with dark veins, body and antennae.
+        void butterfly_vector(ImDrawList* dl, const ImVec2& c, float s, float a, float k) {
             const ImU32 wing = col(c_white, a);
             const ImU32 vein = col(c_sidebar, a);
             for (int side = -1; side <= 1; side += 2) {
@@ -186,18 +183,6 @@ namespace ui::menu {
             }
             dl->AddRectFilled(smin, smax, IM_COL32(int(v->x * 255), int(v->y * 255), int(v->z * 255), int(255 * a)), 14.f * k);
             dl->AddRect(smin, smax, IM_COL32(255, 255, 255, int((g_color_open ? 110 : 40) * a)), 14.f * k, 0, 1.5f * k);
-        }
-
-        // Full-width filled button. Returns true on tap.
-        bool big_button(ImDrawList* dl, const char* label, const ImVec2& pos, float w, float h, float a, float k, bool live) {
-            const ImVec2 mx(pos.x + w, pos.y + h);
-            const bool press = live && tapped(pos, mx);
-            const float ha = anim(std::string("bt_") + label, held(pos, mx) ? 1.f : 0.f, 18.f);
-            dl->AddRectFilled(pos, mx, col(lrp_col(c_red, c_red_light, ha), a), 14.f * k);
-            ImFont* f = menu_font();
-            const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.f, label);
-            dl->AddText(f, f->FontSize, ImVec2(pos.x + (w - ts.x) * 0.5f, pos.y + (h - ts.y) * 0.5f), col(c_white, a), label);
-            return press;
         }
 
         // HSV picker over the content area at the colour row's height.
@@ -286,16 +271,6 @@ namespace ui::menu {
             color_popup(dl, &cfg::esp::box_col, amin, amax, color_y, a, k);
         }
 
-        void unload_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
-            const float pad = k_pad * k;
-            const float cw = amax.x - amin.x - pad * 2.f;
-            ImVec2 c(amin.x + pad, amin.y + pad);
-            text_at(dl, c, 56.f * k, c_text, a, "Unload cloudhack");
-            c.y += 56.f * k;
-            text_at(dl, c, 48.f * k, c_text_dim, a, "Stops ESP and exits.");
-            c.y += 48.f * k + 28.f * k;
-            if (big_button(dl, "Unload", c, cw, 72.f * k, a, k, live)) status::g_quit_request = true;
-        }
     }
 
     void render() {
@@ -373,17 +348,28 @@ namespace ui::menu {
         const ImVec2 logo_c((logo_min.x + logo_max.x) * 0.5f, (logo_min.y + logo_max.y) * 0.5f);
         const float press_t = anim("logo_press", held(logo_min, logo_max) ? 1.f : 0.f, 18.f);
         if (press_t > 0.01f) dl->AddCircleFilled(logo_c, 56.f * k, col(c_tab_sel, a * press_t), 40);
-        butterfly(dl, logo_c, 104.f * k * (1.f - 0.06f * press_t), a, k);
+        const float logo_scale = 1.f - 0.06f * press_t;
+        if (g_logo_tex) {
+            // Texture cropped from the reference screenshot (butterfly.h), aspect kept.
+            const float lh = 100.f * k * logo_scale;
+            const float lw = lh * float(butterfly_w) / float(butterfly_h);
+            dl->AddImage(g_logo_tex, ImVec2(logo_c.x - lw * 0.5f, logo_c.y - lh * 0.5f),
+                         ImVec2(logo_c.x + lw * 0.5f, logo_c.y + lh * 0.5f), ImVec2(0, 0), ImVec2(1, 1), col(c_white, a));
+        } else {
+            butterfly_vector(dl, logo_c, 104.f * k * logo_scale, a, k);
+        }
         if (live && tapped(logo_min, logo_max)) {
             bar::close();
             g_color_open = false;
         }
 
+        // "Visuals" is the only page; "Unload" is an action: one tap unloads.
         const char* tabs[] = {"Visuals", "Unload"};
         for (int i = 0; i < 2; ++i) {
             const ImVec2 tmin(p.x, logo_max.y + k_tab_h * k * float(i)), tmax(p.x + sbw, tmin.y + k_tab_h * k);
-            if (live && tapped(tmin, tmax) && g_tab != i) { g_tab = i; g_color_open = false; }
-            const float t = anim(std::string("tab_") + tabs[i], g_tab == i ? 1.f : 0.f, 16.f);
+            if (i == 1 && live && tapped(tmin, tmax)) status::g_quit_request = true;
+            const float sel = i == 0 ? 1.f : (held(tmin, tmax) ? 1.f : 0.f);
+            const float t = anim(std::string("tab_") + tabs[i], sel, 16.f);
             if (t > 0.01f) dl->AddRectFilled(tmin, tmax, col(c_tab_sel, a * t));
             ImFont* f = menu_font();
             const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.f, tabs[i]);
@@ -394,8 +380,7 @@ namespace ui::menu {
         // ---- content ----
         const ImVec2 amin(p.x + sbw, p.y), amax(pmax.x, pmax.y);
         dl->PushClipRect(amin, amax, true);
-        if (g_tab == tab_visuals) visuals_tab(dl, amin, amax, a, k, live);
-        else unload_tab(dl, amin, amax, a, k, live);
+        visuals_tab(dl, amin, amax, a, k, live);
         dl->PopClipRect();
 
         dl->PopClipRect();

@@ -16,20 +16,18 @@ namespace ui::gesture {
         bool valid{false};
     };
 
-    // Zone radius as a fraction of the short screen side (1224 px -> 184 px).
-    inline constexpr float k_zone_fraction = 0.15f;
-
-    // Auto-detects the centre from the real overlay size. False for a
-    // missing or nonsensical display size (not initialised, 0x0, NaN).
-    inline bool zone_from_display(float width, float height, center_zone& out) {
+    // Auto-detects the centre from the real overlay size. radius is the touch
+    // tolerance around the centre point (a fingertip, not a visible area).
+    // False for a missing or nonsensical display size (not initialised, 0x0, NaN).
+    inline bool zone_from_display(float width, float height, float radius, center_zone& out) {
         out = {};
         if (!std::isfinite(width) || !std::isfinite(height) || width < 2.f || height < 2.f ||
-            width > 16384.f || height > 16384.f) return false;
+            width > 16384.f || height > 16384.f || !std::isfinite(radius) || radius <= 0.f) return false;
         out.width = width;
         out.height = height;
         out.cx = width * 0.5f;
         out.cy = height * 0.5f;
-        out.radius = (width < height ? width : height) * k_zone_fraction;
+        out.radius = radius;
         out.valid = true;
         return true;
     }

@@ -10,7 +10,7 @@
 #include "fonts/menu/pixeloperator.h"
 #include "fonts/esp/esp.h"
 #include "fonts/esp/weapon_icons.h"
-#include "fonts/menu/avatar.h"
+#include "fonts/menu/butterfly.h"
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -29,8 +29,8 @@ ImFont* fontMenu = nullptr;
 ImFont* fontWm = nullptr;
 ImTextureID g_weapon_atlas_tex = nullptr;
 static GLuint g_weapon_atlas_gl = 0;
-ImTextureID g_avatar_tex = nullptr;
-static GLuint g_avatar_gl = 0;
+ImTextureID g_logo_tex = nullptr;
+static GLuint g_logo_gl = 0;
 
 int native_window_screen_x = 0;
 int native_window_screen_y = 0;
@@ -206,9 +206,16 @@ bool ImGui_init() {
     }
     io.FontDefault = fontMedium;
 
-    // Watermark avatar: 128x128 RGBA8 from avatar.h uploaded as a GL texture.
-    // The EGL context is current here (init_egl ran before ImGui_init).
+    // Menu logo (butterfly.h): 8-bit alpha expanded to white RGBA8 and uploaded
+    // as a GL texture. The EGL context is current here (init_egl ran before ImGui_init).
     {
+        std::vector<unsigned char> rgba(size_t(butterfly_w) * size_t(butterfly_h) * 4);
+        for (size_t i = 0; i < size_t(butterfly_w) * size_t(butterfly_h); ++i) {
+            rgba[i * 4 + 0] = 255;
+            rgba[i * 4 + 1] = 255;
+            rgba[i * 4 + 2] = 255;
+            rgba[i * 4 + 3] = butterfly_alpha[i];
+        }
         GLuint tex = 0;
         glGenTextures(1, &tex);
         if (tex) {
@@ -218,10 +225,10 @@ bool ImGui_init() {
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
             glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, neko_avatar_w, neko_avatar_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, neko_avatar_rgba);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, butterfly_w, butterfly_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
             if (glGetError() == GL_NO_ERROR) {
-                g_avatar_gl = tex;
-                g_avatar_tex = reinterpret_cast<ImTextureID>(static_cast<intptr_t>(tex));
+                g_logo_gl = tex;
+                g_logo_tex = reinterpret_cast<ImTextureID>(static_cast<intptr_t>(tex));
             } else {
                 glDeleteTextures(1, &tex);
             }
@@ -352,10 +359,10 @@ void shutdown() {
         return;
     }
 
-    if (g_avatar_gl) {
-        glDeleteTextures(1, &g_avatar_gl);
-        g_avatar_gl = 0;
-        g_avatar_tex = nullptr;
+    if (g_logo_gl) {
+        glDeleteTextures(1, &g_logo_gl);
+        g_logo_gl = 0;
+        g_logo_tex = nullptr;
     }
     if (g_weapon_atlas_gl) {
         glDeleteTextures(1, &g_weapon_atlas_gl);
