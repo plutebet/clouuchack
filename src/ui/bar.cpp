@@ -6,6 +6,9 @@
 // ================================================================================
 
 #include "bar.hpp"
+#include "cfg.hpp"
+#include "open_gesture.hpp"
+#include "../other/diag.hpp"
 #include "theme/theme.hpp"
 #include "Android_draw/draw.h"
 #include "imgui.h"
@@ -28,6 +31,52 @@ namespace ui::bar {
         float g_last_tap = -1.f;
         bool g_state = false;     // menu open requested
         float g_prog = 0.f;
+        gesture::double_tap g_tap;
+        gesture::center_zone g_zone;
+        bool g_last_mode_watermark = true;
+
+        // Centre of the screen from the real overlay size, re-detected when
+        // the surface size changes (rotation, resolution switch).
+        void update_zone() {
+            const ImGuiIO& io = ImGui::GetIO();
+            const float w = io.DisplaySize.x >= 2.f ? io.DisplaySize.x : g_sw;
+            const float h = io.DisplaySize.y >= 2.f ? io.DisplaySize.y : g_sh;
+            if (g_zone.valid && g_zone.width == w && g_zone.height == h) return;
+            if (gesture::zone_from_display(w, h, g_zone))
+                diag::log("INFO", "menu open: screen centre detected at (%.0f, %.0f) radius=%.0f px, display %.0fx%.0f",
+                          g_zone.cx, g_zone.cy, g_zone.radius, w, h);
+            else
+                diag::log("WARN", "menu open: display size %.0fx%.0f unusable, centre double tap disabled", w, h);
+        }
+
+        // Double tap in the centre zone toggles the menu. A press that starts
+        // on the open menu panel belongs to the panel, not to the gesture.
+        void centre_gesture(float k, float ct) {
+            update_zone();
+            const ImGuiIO& io = ImGui::GetIO();
+            g_tap.max_move_px = 24.f * k;
+            g_tap.max_pair_px = 80.f * k;
+            const ImVec2 mp = io.MousePos;
+            const bool on_panel = g_panel_visible && mp.x >= g_panel_min.x && mp.x <= g_panel_max.x &&
+                                  mp.y >= g_panel_min.y && mp.y <= g_panel_max.y;
+            if (g_tap.update(io.MouseDown[0], mp.x, mp.y, double(ct), g_zone, on_panel) && ct - g_last_tap >= 0.25f) {
+                g_state = !g_state;
+                g_last_tap = ct;
+            }
+        }
+
+        // Feedback after the first tap: a faint ring marks the zone until the
+        // second tap or the timeout, so a missed double tap is visible.
+        void draw_centre_hint(float k, float ct) {
+            if (!g_tap.armed || !g_zone.valid) return;
+            const float left = 1.f - ImClamp((ct - float(g_tap.first_t)) / g_tap.max_gap_s, 0.f, 1.f);
+            const float a = left * g_game_alpha;
+            if (a < 0.01f) return;
+            ImDrawList* dl = ImGui::GetForegroundDrawList();
+            const ImVec2 c(g_zone.cx, g_zone.cy);
+            dl->AddCircle(c, g_zone.radius, IM_COL32(255, 255, 255, int(60 * a)), 64, 2.f * k);
+            dl->AddCircleFilled(c, 10.f * k, style::col(clr::accent, a * 0.8f), 24);
+        }
     }
 
     void render() {
@@ -59,6 +108,19 @@ namespace ui::bar {
         g_rect_min = p;
         g_rect_max = ImVec2(p.x + w, p.y + h);
 
+        // ---- open mode: watermark tap, or centre double tap with the watermark hidden ----
+        const bool watermark = cfg::menu::open_watermark;
+        if (watermark != g_last_mode_watermark) {
+            g_last_mode_watermark = watermark;
+            g_tap.reset();
+            g_pressed = false;
+            g_dragging = false;
+            diag::log("INFO", "menu open mode: %s", watermark ? "watermark tap" : "double tap in the screen centre");
+        }
+        if (!watermark) {
+            centre_gesture(k, ct);
+        }
+
         // ---- input: tap vs drag ----
         const float slack = 12.f * k;
         const float drag_threshold = 10.f * k;
@@ -66,7 +128,7 @@ namespace ui::bar {
         const bool hov = mp.x >= p.x - slack && mp.x <= g_rect_max.x + slack &&
                          mp.y >= p.y - slack && mp.y <= g_rect_max.y + slack;
 
-        if (!g_pressed && hov && ImGui::IsMouseClicked(0)) {
+        if (watermark && !g_pressed && hov && ImGui::IsMouseClicked(0)) {
             g_pressed = true;
             g_dragging = false;
             g_press_pos = mp;
@@ -106,6 +168,12 @@ namespace ui::bar {
         const ImVec2 qmax(q.x + w, q.y + h);
         g_rect_min = q;
         g_rect_max = qmax;
+
+        // Hidden watermark: the rectangle above still anchors the menu panel.
+        if (!watermark) {
+            draw_centre_hint(k, ct);
+            return;
+        }
 
         const float a = g_game_alpha;
         ImDrawList* dl = ImGui::GetForegroundDrawList();

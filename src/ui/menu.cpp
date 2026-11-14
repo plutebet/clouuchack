@@ -1,6 +1,7 @@
 // ================================================================================
 // cloudhack menu: a compact panel anchored under the watermark.
-//   Box / Name / Health / Weapon - toggle switches
+//   Box / Name / Health / Weapon / Smooth - toggle switches
+//   Watermark                    - open by watermark tap (on) or centre double tap (off)
 //   Color                                   - one ESP colour (box, health bar)
 //   unload                                  - clean shutdown through status::g_quit_request
 // Panel: tap a control = release without moving; press + move = drag the panel.
@@ -47,9 +48,10 @@ namespace ui::menu {
         float g_resize_sx0 = 1.f, g_resize_sy0 = 1.f, g_resize_w0 = 1.f, g_resize_h0 = 1.f;
         ImVec2 g_grip_min, g_grip_max;         // resize grip of this frame; taps starting there are ignored
 
-        // Panel size in px. Base width 330 px, base height 62 px + 910 px per unit of scale_y.
+        // Panel size in px. Base width 330 px, base height 62 px + k_body px per unit of scale_y.
+        constexpr float k_body = 508.f; // 6 toggle rows (64 each) + color + unload
         float panel_w(float sx, float k) { return ImMin(330.f * k * sx, g_sw - 16.f * k); }
-        float panel_h(float sy, float k) { return 62.f * k + 444.f * k * sy; } // 5 toggle rows + color + unload
+        float panel_h(float sy, float k) { return 62.f * k + k_body * k * sy; }
         // Keeps the whole panel inside the screen with an 8 px margin.
         ImVec2 clamp_panel(ImVec2 q, float w, float h, float k) {
             q.x = ImClamp(q.x, 8.f * k, ImMax(8.f * k, g_sw - 8.f * k - w));
@@ -254,7 +256,7 @@ namespace ui::menu {
         float dt = io.DeltaTime;
         if (dt <= 0.f || dt > 0.1f) dt = 0.016f;
         g_ma = lrp(g_ma, bar::g_open ? 1.f : 0.f, ImClamp(12.f * dt, 0.f, 1.f));
-        if (g_ma < 0.01f) { g_color_open = false; g_picker = 0; return; }
+        if (g_ma < 0.01f) { g_color_open = false; g_picker = 0; bar::g_panel_visible = false; return; }
 
         tick();
         const float k = style::k();
@@ -294,7 +296,7 @@ namespace ui::menu {
                 if (io.MouseDown[0]) {
                     const float dx = mp.x - g_resize_press.x, dy = mp.y - g_resize_press.y;
                     const float max_sx = ImMax(1.f, ImMin(2.5f, (g_sw - 16.f * k) / (330.f * k)));
-                    const float max_sy = ImMax(1.f, ImMin(2.5f, (g_sh - 16.f * k - 62.f * k) / (444.f * k)));
+                    const float max_sy = ImMax(1.f, ImMin(2.5f, (g_sh - 16.f * k - 62.f * k) / (k_body * k)));
                     cfg::menu::scale_x = ImClamp(g_resize_sx0 * (g_resize_w0 + dx) / g_resize_w0, 1.f, max_sx);
                     cfg::menu::scale_y = ImClamp(g_resize_sy0 * (g_resize_h0 + dy) / g_resize_h0, 1.f, max_sy);
                 } else {
@@ -333,6 +335,9 @@ namespace ui::menu {
             }
         }
         const ImVec2 pmax(p.x + w, p.y + ph);
+        bar::g_panel_visible = true;
+        bar::g_panel_min = p;
+        bar::g_panel_max = pmax;
 
         ImDrawList* dl = ImGui::GetForegroundDrawList();
         const float r = 28.f * k;
@@ -351,6 +356,8 @@ namespace ui::menu {
             {"Health", &cfg::esp::health},
             {"Weapon", &cfg::esp::weapon},
             {"Smooth", &cfg::esp::smooth},
+            // On: tap the watermark. Off: watermark hidden, double tap the screen centre.
+            {"Watermark", &cfg::menu::open_watermark},
         };
         for (const item& it : items) {
             bool v = *it.value;

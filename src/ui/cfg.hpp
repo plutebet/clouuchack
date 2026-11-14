@@ -14,6 +14,10 @@ namespace cfg {
 namespace menu {
     inline float scale_x = 1.f;                // panel width scale, set by the grip in the bottom-right corner
     inline float scale_y = 1.f;                // panel height scale
+    // On: the watermark is shown and a tap on it opens / closes the menu.
+    // Off: the watermark is hidden; a double tap in the screen centre
+    // (auto-detected from the overlay size) opens / closes the menu.
+    inline bool open_watermark = true;
 }
 
 namespace esp {
