@@ -176,7 +176,9 @@ namespace cam {
     inline bool managed_to_native(uint64_t managed, uint64_t camera_class, uint64_t& native) {
         if (!exact_class(managed, camera_class)) return false;
         native = rpm<uint64_t>(managed + v100::unity_cached_ptr);
-        return obj_ptr(native);
+        // Native objects are heap allocations; an odd m_CachedPtr
+        // (0x...763 in log 20261114-193524) is a stale or reused wrapper.
+        return obj_ptr(native) && (native & 7) == 0;
     }
 
     // Candidate managed Camera wrappers: scanner heap list plus, when the
@@ -457,6 +459,7 @@ namespace cam {
         }
         g_lock = {best.managed, best.native, best.view_off, best.proj_off, camera_kind_main_native, proc::pid, 0, now};
         g_lock_camera_class = camera_class;
+        confirm_local_flag(best.dist);
         diag::log("CAMERA", "camera locked managed=0x%llx native=0x%llx view=+0x%x proj=+0x%x fov=%.1f far=%.0f (matched=%d of %d)",
                   (unsigned long long)best.managed, (unsigned long long)best.native, best.view_off, best.proj_off,
                   best.info.fov, best.info.far_plane, matched, probed);

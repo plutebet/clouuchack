@@ -150,6 +150,17 @@ inline uint64_t g_scan_lib = 0;
 // obfuscated build order is not stable between updates; resolve which one is
 // the local-player flag from the live set instead of trusting the old order.
 inline int g_local_flag_offset = int(v100::player_local);
+// pid in which a camera lock proved g_local_flag_offset: the native camera sat
+// at the MainCamera bor of the object that flag marks local. Log 20261114-193524:
+// 103 of 104 locks at <= 0.01 m, all with +0x44.
+inline int g_local_flag_confirmed_pid = -1;
+
+inline void confirm_local_flag(float camera_distance) {
+    if (camera_distance > 0.1f || g_local_flag_confirmed_pid == proc::pid) return;
+    g_local_flag_confirmed_pid = proc::pid;
+    diag::log("INFO", "local NetObject flag +0x%x confirmed by camera lock (%.2f m from the local MainCamera)",
+              g_local_flag_offset, camera_distance);
+}
 struct player_cache_entry { uint32_t id{}; uint64_t object{}; long long seen_ms{}; };
 inline std::vector<player_cache_entry> g_player_cache;
 
@@ -821,23 +832,27 @@ inline bool read_player_snapshot(uint64_t object, uint64_t player_class, player_
     return decode_player_snapshot(object, block, player_class, out);
 }
 
+// A live match has exactly one local NetObject. If a flag is true for zero or
+// several objects it is IsServer/IsLocalOwned, not IsLocal. "Exactly one" alone
+// is not proof: in a 1v1 the local object leaves the registry on death, the
+// enemy left alone has +0x45 set, and the old first-match rule made the enemy
+// local (log 20261114-193524: 99 flips +0x44 <-> +0x45, ESP hidden ~2 s each,
+// teams swapped while it lasted).
 inline int resolve_local_flag(const std::vector<player_snapshot>& objects) {
-    if (objects.empty()) return g_local_flag_offset;
-    for (int offset : {0x44, 0x45, 0x46}) {
-        int true_count = 0;
-        for (const player_snapshot& p : objects)
-            if (p.flags[offset - 0x44] != 0) ++true_count;
-        // A live match has exactly one local NetObject. If a flag is true for
-        // zero or several objects it is IsServer/IsLocalOwned, not IsLocal.
-        if (true_count == 1) {
-            if (g_local_flag_offset != offset) {
-                diag::log("INFO", "local NetObject flag resolved at +0x%x (old +0x%x)",
-                          offset, g_local_flag_offset);
-                g_local_flag_offset = offset;
-            }
-            return offset;
-        }
-    }
+    if (g_local_flag_confirmed_pid == proc::pid) return g_local_flag_offset;
+    if (objects.size() < 2) return g_local_flag_offset;
+    int counts[3]{};
+    for (const player_snapshot& p : objects)
+        for (int slot = 0; slot < 3; ++slot)
+            if (p.flags[slot]) ++counts[slot];
+    if (counts[g_local_flag_offset - 0x44] == 1) return g_local_flag_offset;
+    int unique = -1, unique_count = 0;
+    for (int slot = 0; slot < 3; ++slot)
+        if (counts[slot] == 1) { unique = slot; ++unique_count; }
+    if (unique_count != 1) return g_local_flag_offset;
+    diag::log("INFO", "local NetObject flag resolved at +0x%x (old +0x%x, %zu objects, counts %d/%d/%d)",
+              0x44 + unique, g_local_flag_offset, objects.size(), counts[0], counts[1], counts[2]);
+    g_local_flag_offset = 0x44 + unique;
     return g_local_flag_offset;
 }
 
@@ -884,6 +899,10 @@ inline bool read_registry_players(uint64_t registry, uint64_t player_class, std:
 
 // A live match has exactly one local NetObject on one of the three flags.
 inline bool has_local_player(const std::vector<player_snapshot>& objects) {
+    if (g_local_flag_confirmed_pid == proc::pid) {
+        for (const player_snapshot& p : objects) if (p.is_local()) return true;
+        return false;
+    }
     for (int slot = 0; slot < 3; ++slot) {
         int n = 0;
         for (const player_snapshot& p : objects) if (p.flags[slot]) ++n;
