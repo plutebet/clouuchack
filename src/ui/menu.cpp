@@ -1,15 +1,13 @@
 // ================================================================================
-// cloudhack menu: a compact panel anchored under the watermark.
-//   Box / Name / Health / Weapon / Smooth - toggle switches
-//   Watermark                    - open by watermark tap (on) or centre double tap (off)
-//   Color                                   - one ESP colour (box, health bar)
-//   unload                                  - clean shutdown through status::g_quit_request
-// Panel: tap a control = release without moving; press + move = drag the panel.
-// Everything is drawn directly on the foreground draw list; no ImGui windows,
-// so touch handling is a plain rectangle test on io.MousePos + IsMouseClicked.
+// cloudhack menu: sidebar layout.
+//   left:  butterfly logo (tap = close the menu), tabs "Visuals" and "Unload"
+//   right: Visuals - Box / Name / Health / Weapon / Smooth switches,
+//                    Box Style (Full / Corner), Color (HSV popup)
+//          Unload  - unload button (clean shutdown through status::g_quit_request)
+// Opens centred on the auto-detected screen centre (ui::bar). Press on the
+// panel and move = drag; a control fires on release without moving.
+// Everything is drawn on the foreground draw list; no ImGui windows.
 // Geometry is in base px for a 1224 px tall screen, scaled by style::k().
-// The panel never leaves the screen: its position and size are clamped every
-// frame, and all content is clipped to the panel rectangle.
 // ================================================================================
 
 #define IMGUI_DEFINE_MATH_OPERATORS
@@ -23,41 +21,44 @@
 #include "../other/status.hpp"
 #include <cmath>
 #include <cfloat>
-#include <cstdio>
 #include <string>
 
 namespace ui::menu {
     using namespace style;
 
     namespace {
+        // Palette of the reference design: neutral greys, green accent.
+        const ImVec4 c_panel(0x1E / 255.f, 0x1E / 255.f, 0x1E / 255.f, 0.97f);
+        const ImVec4 c_sidebar(0x26 / 255.f, 0x26 / 255.f, 0x26 / 255.f, 1.f);
+        const ImVec4 c_tab_sel(0x3A / 255.f, 0x3A / 255.f, 0x3A / 255.f, 1.f);
+        const ImVec4 c_widget(0x2E / 255.f, 0x2E / 255.f, 0x2E / 255.f, 1.f);
+        const ImVec4 c_track_off(0xD6 / 255.f, 0xD6 / 255.f, 0xD6 / 255.f, 1.f);
+        const ImVec4 c_green(0x3B / 255.f, 0xC4 / 255.f, 0x6F / 255.f, 1.f);
+        const ImVec4 c_red(0xD9 / 255.f, 0x43 / 255.f, 0x4F / 255.f, 1.f);
+        const ImVec4 c_red_light(0xE8 / 255.f, 0x5C / 255.f, 0x67 / 255.f, 1.f);
+        const ImVec4 c_text(0xE8 / 255.f, 0xE8 / 255.f, 0xE8 / 255.f, 1.f);
+        const ImVec4 c_text_dim(0x9A / 255.f, 0x9A / 255.f, 0x9A / 255.f, 1.f);
+        const ImVec4 c_white(1.f, 1.f, 1.f, 1.f);
+        const ImVec4 c_border(1.f, 1.f, 1.f, 0.08f);
+
+        // Base sizes (px at k = 1).
+        constexpr float k_panel_w = 720.f, k_panel_h = 636.f, k_sidebar_w = 200.f;
+        constexpr float k_logo_h = 150.f, k_tab_h = 88.f, k_row = 76.f, k_pad = 28.f;
+
+        enum tab_id { tab_visuals = 0, tab_unload = 1 };
+        int g_tab = tab_visuals;
+
         float g_ma = 0.f;                 // menu alpha 0..1
+        bool g_was_open = false;
+        ImVec2 g_pos;                     // panel top-left
         bool g_color_open = false;        // colour popup
         ImVec4 g_hsv{0.f, 1.f, 1.f, 1.f}; // popup state (hue, sat, val)
         bool g_hsv_init = false;
         int g_picker = 0;                 // 0 none, 1 sat/val square, 2 hue bar
-        // Panel drag: by default the panel sits under the watermark and
-        // follows it; once the user drags the panel it keeps its own place.
-        bool g_menu_custom = false;
-        ImVec2 g_menu_pos;
         bool g_panel_pressed = false;
         bool g_panel_dragging = false;
         ImVec2 g_panel_press;
         ImVec2 g_panel_grab;
-        bool g_resize_active = false;
-        ImVec2 g_resize_press;
-        float g_resize_sx0 = 1.f, g_resize_sy0 = 1.f, g_resize_w0 = 1.f, g_resize_h0 = 1.f;
-        ImVec2 g_grip_min, g_grip_max;         // resize grip of this frame; taps starting there are ignored
-
-        // Panel size in px. Base width 330 px, base height 62 px + k_body px per unit of scale_y.
-        constexpr float k_body = 508.f; // 6 toggle rows (64 each) + color + unload
-        float panel_w(float sx, float k) { return ImMin(330.f * k * sx, g_sw - 16.f * k); }
-        float panel_h(float sy, float k) { return 62.f * k + k_body * k * sy; }
-        // Keeps the whole panel inside the screen with an 8 px margin.
-        ImVec2 clamp_panel(ImVec2 q, float w, float h, float k) {
-            q.x = ImClamp(q.x, 8.f * k, ImMax(8.f * k, g_sw - 8.f * k - w));
-            q.y = ImClamp(q.y, 8.f * k, ImMax(8.f * k, g_sh - 8.f * k - h));
-            return q;
-        }
 
         float lrp(float a, float b, float t) { return a + (b - a) * t; }
         ImVec4 lrp_col(const ImVec4& a, const ImVec4& b, float t) {
@@ -66,140 +67,153 @@ namespace ui::menu {
         bool inside(const ImVec2& p, const ImVec2& mn, const ImVec2& mx) {
             return p.x >= mn.x && p.x <= mx.x && p.y >= mn.y && p.y <= mx.y;
         }
-        // A control fires on release: finger went down inside the rect and
-        // came up inside it without travelling more than the drag threshold.
-        // That is what lets the same finger drag the panel without flipping
-        // the toggle it happened to land on.
+        // A control fires on release: finger went down inside the rect and came
+        // up inside it without travelling more than the drag threshold.
         bool tapped(const ImVec2& mn, const ImVec2& mx) {
             ImGuiIO& io = ImGui::GetIO();
-            if (!ImGui::IsMouseReleased(0) || g_panel_dragging || bar::g_dragging) return false;
+            if (!ImGui::IsMouseReleased(0) || g_panel_dragging) return false;
             const ImVec2 down = io.MouseClickedPos[0];
             const ImVec2 up = io.MousePos;
-            if (inside(down, g_grip_min, g_grip_max)) return false;
             if (!inside(down, mn, mx) || !inside(up, mn, mx)) return false;
             const float thr = 10.f * style::k();
             const float dx = up.x - down.x, dy = up.y - down.y;
             return dx * dx + dy * dy <= thr * thr;
         }
+        bool held(const ImVec2& mn, const ImVec2& mx) {
+            ImGuiIO& io = ImGui::GetIO();
+            return io.MouseDown[0] && !g_panel_dragging && inside(io.MouseClickedPos[0], mn, mx) && inside(io.MousePos, mn, mx);
+        }
+        ImVec2 clamp_panel(ImVec2 q, float w, float h, float k) {
+            q.x = ImClamp(q.x, 8.f * k, ImMax(8.f * k, g_sw - 8.f * k - w));
+            q.y = ImClamp(q.y, 8.f * k, ImMax(8.f * k, g_sh - 8.f * k - h));
+            return q;
+        }
 
         ImFont* menu_font() { return fontMenu ? fontMenu : (fontMedium ? fontMedium : ImGui::GetFont()); }
 
-        // Subtle dot grid like the reference panel.
-        void dots(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, float a, float k) {
-            const float step = 14.f * k;
-            const float sz = ImMax(1.f, 2.f * k);
-            const ImU32 c = col(clr::dot, a);
-            for (float y = mn.y + step; y < mx.y - step * 0.5f; y += step)
-                for (float x = mn.x + step; x < mx.x - step * 0.5f; x += step)
-                    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + sz, y + sz), c);
+        void text_at(ImDrawList* dl, const ImVec2& pos, float h, const ImVec4& c, float a, const char* s) {
+            ImFont* f = menu_font();
+            dl->AddText(f, f->FontSize, ImVec2(pos.x, pos.y + (h - f->FontSize) * 0.5f), col(c, a), s);
         }
 
-        // Label on the left, iOS-style switch on the right. Returns true on tap.
-        bool toggle_row(ImDrawList* dl, const char* label, bool* v, const ImVec2& pos, float w, float h, float a, float k) {
+        // Filled ellipse rotated by rot radians (convex, so AddConvexPolyFilled).
+        void ellipse(ImDrawList* dl, const ImVec2& c, float rx, float ry, float rot, ImU32 color) {
+            constexpr int n = 32;
+            ImVec2 pts[n];
+            const float cr = cosf(rot), sr = sinf(rot);
+            for (int i = 0; i < n; ++i) {
+                const float t = 6.2831853f * float(i) / float(n);
+                const float x = rx * cosf(t), y = ry * sinf(t);
+                pts[i] = ImVec2(c.x + x * cr - y * sr, c.y + x * sr + y * cr);
+            }
+            dl->AddConvexPolyFilled(pts, n, color);
+        }
+
+        // Butterfly logo: white wings with dark veins, body and antennae.
+        void butterfly(ImDrawList* dl, const ImVec2& c, float s, float a, float k) {
+            const ImU32 wing = col(c_white, a);
+            const ImU32 vein = col(c_sidebar, a);
+            for (int side = -1; side <= 1; side += 2) {
+                const float sx = float(side);
+                const ImVec2 upper(c.x + sx * 0.25f * s, c.y - 0.12f * s);
+                const ImVec2 lower(c.x + sx * 0.19f * s, c.y + 0.19f * s);
+                ellipse(dl, upper, 0.25f * s, 0.19f * s, sx * -0.55f, wing);
+                ellipse(dl, lower, 0.16f * s, 0.13f * s, sx * 0.65f, wing);
+                const float vt = ImMax(1.f, 2.2f * k);
+                const ImVec2 root(c.x + sx * 0.04f * s, c.y - 0.02f * s);
+                dl->AddLine(root, ImVec2(c.x + sx * 0.44f * s, c.y - 0.30f * s), vein, vt);
+                dl->AddLine(root, ImVec2(c.x + sx * 0.46f * s, c.y - 0.08f * s), vein, vt);
+                dl->AddLine(root, ImVec2(c.x + sx * 0.22f * s, c.y - 0.30f * s), vein, vt);
+                dl->AddLine(ImVec2(c.x + sx * 0.04f * s, c.y + 0.05f * s), ImVec2(c.x + sx * 0.30f * s, c.y + 0.27f * s), vein, vt);
+                dl->AddLine(ImVec2(c.x + sx * 0.04f * s, c.y + 0.05f * s), ImVec2(c.x + sx * 0.14f * s, c.y + 0.31f * s), vein, vt);
+                ellipse(dl, ImVec2(c.x + sx * 0.33f * s, c.y - 0.17f * s), 0.045f * s, 0.035f * s, 0.f, vein);
+                dl->AddBezierCubic(ImVec2(c.x + sx * 0.015f * s, c.y - 0.22f * s),
+                                   ImVec2(c.x + sx * 0.04f * s, c.y - 0.34f * s),
+                                   ImVec2(c.x + sx * 0.10f * s, c.y - 0.42f * s),
+                                   ImVec2(c.x + sx * 0.17f * s, c.y - 0.46f * s), wing, ImMax(1.f, 2.f * k));
+            }
+            ellipse(dl, ImVec2(c.x, c.y + 0.02f * s), 0.035f * s, 0.25f * s, 0.f, wing);
+            ellipse(dl, ImVec2(c.x, c.y + 0.02f * s), 0.012f * s, 0.21f * s, 0.f, vein);
+        }
+
+        // Label on the left, pill switch on the right. Returns true on tap.
+        bool toggle_row(ImDrawList* dl, const char* label, bool* v, const ImVec2& pos, float w, float h, float a, float k, bool live) {
             bool tap = false;
-            if (!g_color_open && tapped(pos, ImVec2(pos.x + w, pos.y + h))) { *v = !*v; tap = true; }
-
-            ImFont* f = menu_font();
-            dl->AddText(f, f->FontSize, ImVec2(pos.x, pos.y + (h - f->FontSize) * 0.5f), col(clr::text, a), label);
-
-            const float tw = 92.f * k, th = 46.f * k;
+            if (live && !g_color_open && tapped(pos, ImVec2(pos.x + w, pos.y + h))) { *v = !*v; tap = true; }
+            text_at(dl, pos, h, c_text, a, label);
+            const float tw = 104.f * k, th = 54.f * k;
             const ImVec2 tmin(pos.x + w - tw, pos.y + (h - th) * 0.5f);
             const ImVec2 tmax(tmin.x + tw, tmin.y + th);
             const float t = anim(std::string("tg_") + label, *v ? 1.f : 0.f, 16.f);
-
-            dl->AddRectFilled(tmin, tmax, col(lrp_col(clr::widget, clr::track_on, t), a), th * 0.5f);
-            dl->AddRect(tmin, tmax, col(clr::border, a), th * 0.5f, 0, 1.f * k);
+            dl->AddRectFilled(tmin, tmax, col(lrp_col(c_track_off, c_green, t), a), th * 0.5f);
             const float kr = th * 0.5f - 6.f * k;
-            const float kx = tmin.x + th * 0.5f + (tw - th) * t;
-            const ImVec2 kc(kx, tmin.y + th * 0.5f);
-            dl->AddCircleFilled(ImVec2(kc.x, kc.y + 1.5f * k), kr, IM_COL32(0, 0, 0, int(60 * a)), 24);
-            dl->AddCircleFilled(kc, kr, col(lrp_col(clr::knob_off, clr::accent, t), a), 24);
+            const ImVec2 kc(tmin.x + th * 0.5f + (tw - th) * t, tmin.y + th * 0.5f);
+            dl->AddCircleFilled(ImVec2(kc.x, kc.y + 1.5f * k), kr, IM_COL32(0, 0, 0, int(50 * a)), 24);
+            dl->AddCircleFilled(kc, kr, col(c_white, a), 24);
             return tap;
         }
 
-        // "label   [-] value [+]" for an int setting in [lo, hi]. Returns true when it changed.
-        bool stepper_row(ImDrawList* dl, const char* label, int* v, int lo, int hi, int step,
-                         const ImVec2& pos, float w, float h, float a, float k, bool live) {
-            ImFont* f = menu_font();
-            dl->AddText(f, f->FontSize, ImVec2(pos.x, pos.y + (h - f->FontSize) * 0.5f), col(clr::text, a), label);
-
-            const float bs = 48.f * k, vw = 64.f * k;
-            const float cy = pos.y + h * 0.5f;
-            const ImVec2 plus_min(pos.x + w - bs, cy - bs * 0.5f), plus_max(pos.x + w, cy + bs * 0.5f);
-            const ImVec2 minus_min(plus_min.x - vw - bs, plus_min.y), minus_max(plus_min.x - vw, plus_max.y);
-
+        // Row of equal buttons, the selected one green. Returns true when it changed.
+        bool segmented(ImDrawList* dl, const char* const* names, int count, int* v, const ImVec2& pos, float w, float h, float a, float k, bool live) {
+            const float gap = 10.f * k;
+            const float bw = (w - gap * float(count - 1)) / float(count);
             const int before = *v;
-            if (live && !g_color_open && tapped(minus_min, minus_max)) *v = ImMax(lo, *v - step);
-            if (live && !g_color_open && tapped(plus_min, plus_max)) *v = ImMin(hi, *v + step);
-
-            const float r = 12.f * k;
-            const ImU32 btn_col = col(clr::widget, a);
-            const ImU32 txt_col = col(clr::text_light, a);
-            dl->AddRectFilled(minus_min, minus_max, btn_col, r);
-            dl->AddRectFilled(plus_min, plus_max, btn_col, r);
-            const ImVec2 ms = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.f, "-");
-            const ImVec2 ps = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.f, "+");
-            dl->AddText(f, f->FontSize, ImVec2(minus_min.x + (bs - ms.x) * 0.5f, cy - ms.y * 0.5f), txt_col, "-");
-            dl->AddText(f, f->FontSize, ImVec2(plus_min.x + (bs - ps.x) * 0.5f, cy - ps.y * 0.5f), txt_col, "+");
-
-            char value[16];
-            std::snprintf(value, sizeof(value), "%d", *v);
-            const ImVec2 vs = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.f, value);
-            dl->AddText(f, f->FontSize, ImVec2(minus_max.x + (vw - vs.x) * 0.5f, cy - vs.y * 0.5f), col(clr::text, a), value);
+            ImFont* f = menu_font();
+            for (int i = 0; i < count; ++i) {
+                const ImVec2 mn(pos.x + (bw + gap) * float(i), pos.y), mx(mn.x + bw, pos.y + h);
+                if (live && !g_color_open && tapped(mn, mx)) *v = i;
+                const float t = anim(std::string("sg_") + names[i], *v == i ? 1.f : 0.f, 16.f);
+                dl->AddRectFilled(mn, mx, col(lrp_col(c_widget, c_green, t), a), 12.f * k);
+                const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.f, names[i]);
+                dl->AddText(f, f->FontSize, ImVec2(mn.x + (bw - ts.x) * 0.5f, mn.y + (h - ts.y) * 0.5f),
+                            col(lrp_col(c_text, c_white, t), a), names[i]);
+            }
             return *v != before;
         }
 
         // Label + rounded colour swatch. Tap toggles the popup.
-        void color_row(ImDrawList* dl, const char* label, ImVec4* v, const ImVec2& pos, float w, float h, float a, float k) {
-            ImFont* f = menu_font();
-            dl->AddText(f, f->FontSize, ImVec2(pos.x, pos.y + (h - f->FontSize) * 0.5f), col(clr::text, a), label);
-
-            const float s = 58.f * k;
-            const ImVec2 smin(pos.x + w - s, pos.y + (h - s) * 0.5f);
-            const ImVec2 smax(smin.x + s, smin.y + s);
-            if (tapped(smin, smax)) {
+        void color_row(ImDrawList* dl, const char* label, ImVec4* v, const ImVec2& pos, float w, float h, float a, float k, bool live) {
+            text_at(dl, pos, h, c_text, a, label);
+            const float s = 54.f * k;
+            const ImVec2 smin(pos.x + w - s * 1.9f, pos.y + (h - s) * 0.5f);
+            const ImVec2 smax(pos.x + w, smin.y + s);
+            if (live && tapped(smin, smax)) {
                 g_color_open = !g_color_open;
                 if (g_color_open) {
                     ImGui::ColorConvertRGBtoHSV(v->x, v->y, v->z, g_hsv.x, g_hsv.y, g_hsv.z);
                     g_hsv_init = true;
                 }
             }
-            dl->AddRectFilled(ImVec2(smin.x, smin.y + 2.f * k), ImVec2(smax.x, smax.y + 2.f * k), IM_COL32(0, 0, 0, int(60 * a)), 16.f * k);
-            dl->AddRectFilled(smin, smax, IM_COL32(int(v->x * 255), int(v->y * 255), int(v->z * 255), int(255 * a)), 16.f * k);
-            dl->AddRect(smin, smax, IM_COL32(255, 255, 255, int((g_color_open ? 90 : 35) * a)), 16.f * k, 0, 1.5f * k);
+            dl->AddRectFilled(smin, smax, IM_COL32(int(v->x * 255), int(v->y * 255), int(v->z * 255), int(255 * a)), 14.f * k);
+            dl->AddRect(smin, smax, IM_COL32(255, 255, 255, int((g_color_open ? 110 : 40) * a)), 14.f * k, 0, 1.5f * k);
         }
 
-        // Full-width filled red button. Returns true on tap.
-        bool big_button(ImDrawList* dl, const char* label, const ImVec2& pos, float w, float h, float a, float k) {
+        // Full-width filled button. Returns true on tap.
+        bool big_button(ImDrawList* dl, const char* label, const ImVec2& pos, float w, float h, float a, float k, bool live) {
             const ImVec2 mx(pos.x + w, pos.y + h);
-            ImGuiIO& io = ImGui::GetIO();
-            const bool hov = inside(io.MousePos, pos, mx);
-            const bool press = !g_color_open && tapped(pos, mx);
-            const float ha = anim(std::string("bt_") + label, (hov && io.MouseDown[0] && !g_panel_dragging) ? 1.f : 0.f, 18.f);
-            const float r = 20.f * k;
-            dl->AddRectFilled(ImVec2(pos.x, pos.y + 3.f * k), ImVec2(mx.x, mx.y + 3.f * k), IM_COL32(0, 0, 0, int(70 * a)), r);
-            dl->AddRectFilled(pos, mx, col(lrp_col(clr::accent_dark, clr::accent_light, ha), a), r);
-            dl->AddRect(pos, mx, IM_COL32(255, 255, 255, int(25 * a)), r, 0, 1.f * k);
+            const bool press = live && tapped(pos, mx);
+            const float ha = anim(std::string("bt_") + label, held(pos, mx) ? 1.f : 0.f, 18.f);
+            dl->AddRectFilled(pos, mx, col(lrp_col(c_red, c_red_light, ha), a), 14.f * k);
             ImFont* f = menu_font();
             const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.f, label);
-            dl->AddText(f, f->FontSize, ImVec2(pos.x + (w - ts.x) * 0.5f, pos.y + (h - ts.y) * 0.5f), col(clr::text_light, a), label);
+            dl->AddText(f, f->FontSize, ImVec2(pos.x + (w - ts.x) * 0.5f, pos.y + (h - ts.y) * 0.5f), col(c_white, a), label);
             return press;
         }
 
-        // HSV picker, drawn on top of the panel at the colour row's height.
-        // Always inside the panel rectangle, so it never leaves the menu.
-        void color_popup(ImDrawList* dl, ImVec4* v, const ImVec2& pmin, const ImVec2& pmax, float anchor_y, float a, float k) {
+        // HSV picker over the content area at the colour row's height.
+        void color_popup(ImDrawList* dl, ImVec4* v, const ImVec2& amin, const ImVec2& amax, float anchor_y, float a, float k) {
             if (!g_color_open) return;
             if (!g_hsv_init) { ImGui::ColorConvertRGBtoHSV(v->x, v->y, v->z, g_hsv.x, g_hsv.y, g_hsv.z); g_hsv_init = true; }
 
-            const float pad = 16.f * k, sv = 190.f * k, hue_w = 26.f * k, gap = 12.f * k;
+            const float pad = 16.f * k, sv = 220.f * k, hue_w = 28.f * k, gap = 14.f * k;
             const float pw = pad + sv + gap + hue_w + pad;
             const float ph = pad + sv + pad;
-            ImVec2 o(pmin.x + (pmax.x - pmin.x - pw) * 0.5f, ImClamp(anchor_y, pmin.y + 8.f * k, ImMax(pmin.y + 8.f * k, pmax.y - ph - 8.f * k)));
+            const ImVec2 o(amax.x - pw - 8.f * k,
+                           ImClamp(anchor_y - ph - 8.f * k, amin.y + 8.f * k, ImMax(amin.y + 8.f * k, amax.y - ph - 8.f * k)));
             const ImVec2 omax(o.x + pw, o.y + ph);
 
-            dl->AddRectFilled(o, omax, col(clr::bg, a), 22.f * k);
-            dl->AddRect(o, omax, col(clr::border_light, a), 22.f * k, 0, 1.5f * k);
+            dl->AddRectFilled(o, omax, col(c_sidebar, a), 18.f * k);
+            dl->AddRect(o, omax, col(c_border, a), 18.f * k, 0, 1.5f * k);
 
             const ImVec2 sv_min(o.x + pad, o.y + pad), sv_max(sv_min.x + sv, sv_min.y + sv);
             const ImVec2 hue_min(sv_max.x + gap, sv_min.y), hue_max(hue_min.x + hue_w, sv_max.y);
@@ -209,7 +223,6 @@ namespace ui::menu {
             const ImU32 hu = IM_COL32(int(hc.x * 255), int(hc.y * 255), int(hc.z * 255), int(255 * a));
             dl->AddRectFilledMultiColor(sv_min, sv_max, IM_COL32(255, 255, 255, int(255 * a)), hu, hu, IM_COL32(255, 255, 255, int(255 * a)));
             dl->AddRectFilledMultiColor(sv_min, sv_max, IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, int(255 * a)), IM_COL32(0, 0, 0, int(255 * a)));
-            dl->AddRect(sv_min, sv_max, col(clr::border_dark, a), 0, 0, 1.f * k);
 
             const float seg = (hue_max.y - hue_min.y) / 6.f;
             for (int i = 0; i < 6; ++i) {
@@ -220,7 +233,6 @@ namespace ui::menu {
                 const ImU32 u2 = IM_COL32(int(c2.x * 255), int(c2.y * 255), int(c2.z * 255), int(255 * a));
                 dl->AddRectFilledMultiColor(ImVec2(hue_min.x, hue_min.y + seg * i), ImVec2(hue_max.x, hue_min.y + seg * (i + 1)), u1, u1, u2, u2);
             }
-            dl->AddRect(hue_min, hue_max, col(clr::border_dark, a), 0, 0, 1.f * k);
 
             ImGuiIO& io = ImGui::GetIO();
             const ImVec2 mp = io.MousePos;
@@ -247,6 +259,43 @@ namespace ui::menu {
             const float hy = hue_min.y + g_hsv.x * (hue_max.y - hue_min.y);
             dl->AddRectFilled(ImVec2(hue_min.x - 3.f * k, hy - 2.f * k), ImVec2(hue_max.x + 3.f * k, hy + 2.f * k), IM_COL32(255, 255, 255, int(255 * a)), 2.f * k);
         }
+
+        void visuals_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
+            const float pad = k_pad * k, row = k_row * k;
+            const float cw = amax.x - amin.x - pad * 2.f;
+            ImVec2 c(amin.x + pad, amin.y + pad * 0.5f);
+            struct item { const char* name; bool* value; };
+            const item items[] = {
+                {"Box", &cfg::esp::box},
+                {"Name", &cfg::esp::name},
+                {"Health", &cfg::esp::health},
+                {"Weapon", &cfg::esp::weapon},
+                {"Smooth", &cfg::esp::smooth},
+            };
+            for (const item& it : items) {
+                toggle_row(dl, it.name, it.value, c, cw, row, a, k, live);
+                c.y += row;
+            }
+            text_at(dl, c, 48.f * k, c_text, a, "Box Style");
+            c.y += 48.f * k;
+            static const char* const styles[] = {"Full", "Corner"};
+            segmented(dl, styles, 2, &cfg::esp::box_type, c, cw, 58.f * k, a, k, live);
+            c.y += 58.f * k + 12.f * k;
+            const float color_y = c.y;
+            color_row(dl, "Color", &cfg::esp::box_col, c, cw, row, a, k, live);
+            color_popup(dl, &cfg::esp::box_col, amin, amax, color_y, a, k);
+        }
+
+        void unload_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
+            const float pad = k_pad * k;
+            const float cw = amax.x - amin.x - pad * 2.f;
+            ImVec2 c(amin.x + pad, amin.y + pad);
+            text_at(dl, c, 56.f * k, c_text, a, "Unload cloudhack");
+            c.y += 56.f * k;
+            text_at(dl, c, 48.f * k, c_text_dim, a, "Stops ESP and exits.");
+            c.y += 48.f * k + 28.f * k;
+            if (big_button(dl, "Unload", c, cw, 72.f * k, a, k, live)) status::g_quit_request = true;
+        }
     }
 
     void render() {
@@ -256,62 +305,33 @@ namespace ui::menu {
         float dt = io.DeltaTime;
         if (dt <= 0.f || dt > 0.1f) dt = 0.016f;
         g_ma = lrp(g_ma, bar::g_open ? 1.f : 0.f, ImClamp(12.f * dt, 0.f, 1.f));
+        const float k = style::k();
+        const float w = ImMin(k_panel_w * k, g_sw - 16.f * k);
+        const float ph = ImMin(k_panel_h * k, g_sh - 16.f * k);
+
+        // Every open starts centred on the detected screen centre.
+        if (bar::g_open && !g_was_open) {
+            const ImVec2 c = bar::g_center_valid ? bar::g_center : ImVec2(g_sw * 0.5f, g_sh * 0.5f);
+            g_pos = ImVec2(c.x - w * 0.5f, c.y - ph * 0.5f);
+            g_color_open = false;
+            g_panel_pressed = g_panel_dragging = false;
+        }
+        g_was_open = bar::g_open;
         if (g_ma < 0.01f) { g_color_open = false; g_picker = 0; bar::g_panel_visible = false; return; }
 
         tick();
-        const float k = style::k();
         const float a = g_ma * bar::game_alpha();
+        const bool live = g_ma > 0.6f && bar::g_open;
+        cfg::esp::health_col = cfg::esp::box_col;   // one colour for box and health bar
 
-        // One colour for the whole ESP (the name stays white).
-        cfg::esp::health_col = cfg::esp::box_col;
-
-        const float pad = 24.f * k;
-        const float sx = cfg::menu::scale_x, sy = cfg::menu::scale_y;
-        const float w = panel_w(sx, k);
-        const float row = 64.f * k * sy;
-        const float crow = 72.f * k * sy;
-        const float btn = 64.f * k * sy;
-        const float ph = panel_h(sy, k);
-
-        ImVec2 p = g_menu_custom ? g_menu_pos
-                                 : ImVec2(bar::g_rect_min.x - (1.f - g_ma) * 40.f * k, bar::g_rect_max.y + 14.f * k);
-        p = clamp_panel(p, w, ph, k);
-
-        // ---- resize grip, bottom-right corner: scales the panel in x and y, never past the screen ----
-        {
-            const ImVec2 mp = io.MousePos;
-            const float grip = 48.f * k;
-            g_grip_min = ImVec2(p.x + w - grip, p.y + ph - grip);
-            g_grip_max = ImVec2(p.x + w, p.y + ph);
-            if (!g_resize_active && !g_panel_pressed && !bar::g_dragging && g_ma > 0.6f &&
-                ImGui::IsMouseClicked(0) && inside(mp, g_grip_min, g_grip_max)) {
-                g_resize_active = true;
-                g_resize_press = mp;
-                g_resize_sx0 = sx;
-                g_resize_sy0 = sy;
-                g_resize_w0 = w;
-                g_resize_h0 = ph;
-            }
-            if (g_resize_active) {
-                if (io.MouseDown[0]) {
-                    const float dx = mp.x - g_resize_press.x, dy = mp.y - g_resize_press.y;
-                    const float max_sx = ImMax(1.f, ImMin(2.5f, (g_sw - 16.f * k) / (330.f * k)));
-                    const float max_sy = ImMax(1.f, ImMin(2.5f, (g_sh - 16.f * k - 62.f * k) / (k_body * k)));
-                    cfg::menu::scale_x = ImClamp(g_resize_sx0 * (g_resize_w0 + dx) / g_resize_w0, 1.f, max_sx);
-                    cfg::menu::scale_y = ImClamp(g_resize_sy0 * (g_resize_h0 + dy) / g_resize_h0, 1.f, max_sy);
-                } else {
-                    g_resize_active = false;
-                }
-            }
-        }
+        g_pos = clamp_panel(g_pos, w, ph, k);
+        ImVec2 p = g_pos;
 
         // ---- panel drag (press anywhere on the panel, move > threshold) ----
         {
             const ImVec2 mp = io.MousePos;
-            const ImVec2 cur_max(p.x + w, p.y + ph);
             const float thr = 10.f * k;
-            if (!g_panel_pressed && !bar::g_dragging && !g_resize_active && g_ma > 0.6f && ImGui::IsMouseClicked(0) &&
-                inside(mp, p, cur_max) && !inside(mp, g_grip_min, g_grip_max)) {
+            if (!g_panel_pressed && live && ImGui::IsMouseClicked(0) && inside(mp, p, ImVec2(p.x + w, p.y + ph))) {
                 g_panel_pressed = true;
                 g_panel_dragging = false;
                 g_panel_press = mp;
@@ -322,67 +342,64 @@ namespace ui::menu {
                     const float dx = mp.x - g_panel_press.x, dy = mp.y - g_panel_press.y;
                     if (!g_panel_dragging && g_picker == 0 && dx * dx + dy * dy > thr * thr) g_panel_dragging = true;
                     if (g_panel_dragging) {
-                        g_menu_custom = true;
-                        g_menu_pos = clamp_panel(ImVec2(mp.x - g_panel_grab.x, mp.y - g_panel_grab.y), w, ph, k);
-                        p = g_menu_pos;
+                        g_pos = clamp_panel(ImVec2(mp.x - g_panel_grab.x, mp.y - g_panel_grab.y), w, ph, k);
+                        p = g_pos;
                     }
                 } else {
-                    g_panel_pressed = false;
-                    // keep g_panel_dragging true for this frame so release-taps are ignored
+                    g_panel_pressed = false;   // g_panel_dragging stays set this frame so the release is not a tap
                 }
             } else {
                 g_panel_dragging = false;
             }
         }
+
+        // Open/close animation: slide up a little while fading.
+        p.y += (1.f - g_ma) * 24.f * k;
         const ImVec2 pmax(p.x + w, p.y + ph);
         bar::g_panel_visible = true;
         bar::g_panel_min = p;
         bar::g_panel_max = pmax;
 
         ImDrawList* dl = ImGui::GetForegroundDrawList();
-        const float r = 28.f * k;
-        dl->AddRectFilled(p, pmax, col(clr::bg, a), r);
+        const float r = 30.f * k;
+        const float sbw = k_sidebar_w * k;
+        dl->AddRectFilled(ImVec2(p.x, p.y + 4.f * k), ImVec2(pmax.x, pmax.y + 6.f * k), IM_COL32(0, 0, 0, int(70 * a)), r);
+        dl->AddRectFilled(p, pmax, col(c_panel, a), r);
+        dl->AddRectFilled(p, ImVec2(p.x + sbw, pmax.y), col(c_sidebar, a), r, ImDrawFlags_RoundCornersLeft);
         dl->PushClipRect(p, pmax, true);
-        dots(dl, ImVec2(p.x + 6.f * k, p.y + 6.f * k), ImVec2(pmax.x - 6.f * k, pmax.y - 6.f * k), a, k);
 
-        const float cw = w - pad * 2.f;
-        ImVec2 c(p.x + pad, p.y + pad);
-        const bool interactive = g_ma > 0.6f;
-
-        struct item { const char* name; bool* value; };
-        const item items[] = {
-            {"Box", &cfg::esp::box},
-            {"Name", &cfg::esp::name},
-            {"Health", &cfg::esp::health},
-            {"Weapon", &cfg::esp::weapon},
-            {"Smooth", &cfg::esp::smooth},
-            // On: tap the watermark. Off: watermark hidden, double tap the screen centre.
-            {"Watermark", &cfg::menu::open_watermark},
-        };
-        for (const item& it : items) {
-            bool v = *it.value;
-            if (toggle_row(dl, it.name, &v, c, cw, row, a, k) && interactive) *it.value = v;
-            c.y += row;
+        // ---- sidebar: logo (close) + tabs ----
+        const ImVec2 logo_min(p.x, p.y), logo_max(p.x + sbw, p.y + k_logo_h * k);
+        const ImVec2 logo_c((logo_min.x + logo_max.x) * 0.5f, (logo_min.y + logo_max.y) * 0.5f);
+        const float press_t = anim("logo_press", held(logo_min, logo_max) ? 1.f : 0.f, 18.f);
+        if (press_t > 0.01f) dl->AddCircleFilled(logo_c, 56.f * k, col(c_tab_sel, a * press_t), 40);
+        butterfly(dl, logo_c, 104.f * k * (1.f - 0.06f * press_t), a, k);
+        if (live && tapped(logo_min, logo_max)) {
+            bar::close();
+            g_color_open = false;
         }
 
-        const float color_y = c.y;
-        color_row(dl, "Color", &cfg::esp::box_col, c, cw, crow, a, k);
-        c.y += crow + 10.f * k;
-
-        if (big_button(dl, "unload", c, cw, btn, a, k) && interactive) {
-            status::g_quit_request = true;
+        const char* tabs[] = {"Visuals", "Unload"};
+        for (int i = 0; i < 2; ++i) {
+            const ImVec2 tmin(p.x, logo_max.y + k_tab_h * k * float(i)), tmax(p.x + sbw, tmin.y + k_tab_h * k);
+            if (live && tapped(tmin, tmax) && g_tab != i) { g_tab = i; g_color_open = false; }
+            const float t = anim(std::string("tab_") + tabs[i], g_tab == i ? 1.f : 0.f, 16.f);
+            if (t > 0.01f) dl->AddRectFilled(tmin, tmax, col(c_tab_sel, a * t));
+            ImFont* f = menu_font();
+            const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.f, tabs[i]);
+            dl->AddText(f, f->FontSize, ImVec2(tmin.x + (sbw - ts.x) * 0.5f, tmin.y + (k_tab_h * k - ts.y) * 0.5f),
+                        col(lrp_col(c_text_dim, c_text, t), a), tabs[i]);
         }
 
-        color_popup(dl, &cfg::esp::box_col, p, pmax, color_y, a, k);
+        // ---- content ----
+        const ImVec2 amin(p.x + sbw, p.y), amax(pmax.x, pmax.y);
+        dl->PushClipRect(amin, amax, true);
+        if (g_tab == tab_visuals) visuals_tab(dl, amin, amax, a, k, live);
+        else unload_tab(dl, amin, amax, a, k, live);
         dl->PopClipRect();
 
-        dl->AddRect(ImVec2(p.x + 0.75f * k, p.y + 0.75f * k), ImVec2(pmax.x - 0.75f * k, pmax.y - 0.75f * k),
-                    col(clr::border_light, a), r, 0, 1.5f * k);
-        for (int i = 1; i <= 3; ++i) {
-            const float o = 8.f * k * float(i);
-            dl->AddLine(ImVec2(pmax.x - o, pmax.y - 6.f * k), ImVec2(pmax.x - 6.f * k, pmax.y - o), col(clr::text_dim, a), 1.5f * k);
-        }
-
+        dl->PopClipRect();
+        dl->AddRect(p, pmax, col(c_border, a), r, 0, 1.5f * k);
         if (!g_panel_pressed) g_panel_dragging = false;
     }
 }
