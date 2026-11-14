@@ -196,6 +196,28 @@ void visuals::draw() {
     cam::main_chain chain{};
     std::vector<camera_candidate> Cameras = cam::resolve(LocalPlayer, chain);
     if (Cameras.empty()) { g_camera = 0; esp_wait("camera resolution (controller / bor / transform)"); return; }
+    // The synthetic sources (bor with FOV 60, vqn, ios-transform) are only
+    // approximations; ios-transform in particular can project far off the
+    // model. Once the real camera was locked in this match, a short loss of
+    // the lock (it re-acquires within 250 ms when the camera still exists)
+    // hides the boxes instead of drawing them in the wrong place. After 2 s
+    // without the lock the synthetic fallback is used as before.
+    {
+        static long long last_native_ms = 0;
+        static uint64_t native_match = 0;
+        if (Cameras.front().kind == camera_kind_main_native) {
+            last_native_ms = now_ms;
+            native_match = LocalPlayer;
+        } else if (native_match == LocalPlayer && now_ms - last_native_ms < 2000) {
+            static long long hold_log = 0;
+            if (diag::every(hold_log, 1000))
+                diag::log("CAMERA", "native camera lost %lld ms ago: ESP hidden while re-acquiring (best fallback=%s)",
+                          now_ms - last_native_ms, camera_kind_name(Cameras.front().kind));
+            g_camera = 0;
+            esp_wait("re-acquiring native camera");
+            return;
+        }
+    }
 
     crash::stage("esp-poses");
     static std::vector<player::frame_player> s_frame;
@@ -228,6 +250,7 @@ void visuals::draw() {
         int max_hp{100};
         int weapon{-1};
         float distance{0.f};
+        bool rebuilt{false};
     };
     std::vector<enemy_frame> frame_enemies;
     frame_enemies.reserve(s_frame.size());
@@ -270,6 +293,7 @@ void visuals::draw() {
         e.max_hp = Health.max_hp;
         if (cfg::esp::weapon) e.weapon = weapon::active_id(p);
         if (!apply_pose(e, s_frame[fi].pose)) continue;
+        e.rebuilt = s_frame[fi].rebuilt;
         ++positioned;
         e.distance = calculate_distance(e.position, LocalPosition);
         if (e.distance > 500.f) continue;
@@ -300,6 +324,22 @@ void visuals::draw() {
     const long long sample_us = diag::now_us();
     for (enemy_frame& e : frame_enemies) {
         motion_state& m = g_motion[e.object];
+        // Glitch detector: a player cannot cover 3 m in 150 ms (running is
+        // ~6 m/s). Such a step means the position source is wrong; the log
+        // line says which one so a remaining case can be traced.
+        if (m.has_cur && sample_us - m.cur.t_us < 150000) {
+            const float step = vdist(e.position, m.cur.feet);
+            if (step > 3.f) {
+                static long long glitch_log = 0;
+                static unsigned glitches = 0;
+                ++glitches;
+                if (diag::every(glitch_log, 500))
+                    diag::log("GLITCH", "player=0x%llx step=%.1fm in %lldms from=(%.1f %.1f %.1f) to=(%.1f %.1f %.1f) rebuilt=%d chainsChanged=%u camera=%s total=%u",
+                              (unsigned long long)e.object, step, (sample_us - m.cur.t_us) / 1000,
+                              m.cur.feet.x, m.cur.feet.y, m.cur.feet.z, e.position.x, e.position.y, e.position.z,
+                              e.rebuilt ? 1 : 0, player::g_hierarchy_changes, camera_kind_name(Cameras.front().kind), glitches);
+            }
+        }
         motion_update(m, e.position, e.head, sample_us);
         if (cfg::esp::smooth) motion_render(m, sample_us, e.position, e.head);
     }

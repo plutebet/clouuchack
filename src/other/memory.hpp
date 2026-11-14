@@ -197,12 +197,39 @@ inline bool mem_read_scatter(const read_part* parts, size_t count, bool* ok = nu
     return all;
 }
 
-// Any number of parts, 64 per process_vm_readv. `ok` is required: one
-// unreadable part (despawned player) must not drop the rest of the frame.
+// Any number of parts, up to 512 per process_vm_readv (IOV_MAX is 1024).
+// `ok` is required. process_vm_readv never splits an iovec element and stops
+// at the first unreadable one, so the byte count says exactly which parts
+// arrived: the failing part is retried alone (pread fallback) and the call
+// continues after it. One despawned player costs one extra call, not a
+// per-part retry of the whole frame.
 inline void mem_read_batch(const read_part* parts, size_t count, bool* ok) {
-    for (size_t start = 0; start < count; start += 64) {
-        const size_t n = std::min<size_t>(64, count - start);
-        mem_read_scatter(parts + start, n, ok + start);
+    constexpr size_t kMax = 512;
+    static thread_local struct iovec loc[kMax];
+    static thread_local struct iovec rem[kMax];
+    auto usable = [](const read_part& p) { return p.addr >= 0x1000 && p.dst && p.size; };
+    size_t i = 0;
+    while (i < count) {
+        if (proc::pid < 0) { for (; i < count; ++i) ok[i] = false; return; }
+        if (!usable(parts[i])) { ok[i] = false; ++i; continue; }
+        size_t n = 0;
+        while (i + n < count && n < kMax && usable(parts[i + n])) {
+            loc[n].iov_base = parts[i + n].dst;
+            loc[n].iov_len = parts[i + n].size;
+            rem[n].iov_base = reinterpret_cast<void*>(parts[i + n].addr);
+            rem[n].iov_len = parts[i + n].size;
+            ++n;
+        }
+        const long r = sys::vm_read(proc::pid, loc, n, rem, n);
+        if (r == -ESRCH) { for (; i < count; ++i) ok[i] = false; return; } // process gone
+        size_t left = r > 0 ? size_t(r) : 0, k = 0;
+        for (; k < n && left >= parts[i + k].size; ++k) {
+            ok[i + k] = true;
+            left -= parts[i + k].size;
+        }
+        if (k == n) { i += n; continue; }
+        ok[i + k] = mem_read(parts[i + k].addr, parts[i + k].dst, parts[i + k].size);
+        i += k + 1;
     }
 }
 

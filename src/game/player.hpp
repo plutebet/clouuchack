@@ -433,6 +433,7 @@ namespace player {
     // every frame (1 read + 2 per parent level per transform).
     struct hierarchy_ref {
         uint64_t native{0};
+        uint64_t data{0};      // TransformHierarchy*, re-checked every frame
         uint64_t entries{0};
         uint64_t parents{0};
         int index{-1};
@@ -471,6 +472,7 @@ namespace player {
         const uint64_t parents = rpm<uint64_t>(data + uint64_t(layout.parents_offset));
         if (!plausible(entries) || !plausible(parents) || entries == parents) return false;
         ref.native = native;
+        ref.data = data;
         ref.entries = entries;
         ref.parents = parents;
         ref.index = index;
@@ -640,17 +642,33 @@ namespace player {
         bool want_health{true};
         PlayerPose pose{};
         HealthInfo health{};
+        bool rebuilt{false};   // the cached chain was stale this frame and was re-resolved
     };
 
     struct frame_batch {
+        // Per-frame proof that a cached chain still describes the same
+        // transforms: TransformHierarchy*/index of the native Transform,
+        // entries/parents buffers of the hierarchy and the parent index of
+        // every chain node. Unity compacts and reallocates a hierarchy when
+        // children are added or removed under the player (weapon swap,
+        // effects); before, the cache kept reading the old indices or the
+        // freed buffer for up to 500 ms.
+        struct verify {
+            uint64_t data{0}, entries{0}, parents{0};
+            int32_t index{-1};
+            int32_t parent_of[hierarchy_ref::kMaxChain]{};
+        };
         std::vector<read_part> parts;
         std::vector<TransformEntry> entries;
+        std::vector<verify> verifies;
         std::unique_ptr<bool[]> ok; // vector<bool> has no data()
         size_t ok_capacity{0};
         struct slot {
             transform_cache_entry* cache{nullptr};
             int ref_first[2]{-1, -1};  // index of the first TRS entry per ref, -1 = slow path
             int ref_part[2]{-1, -1};   // index of that entry's part; a ref's parts are contiguous
+            int ref_verify[2]{-1, -1}; // index into verifies
+            int ref_verify_part[2]{-1, -1}; // first of its 4 + chain_len parts
             int klass_part{-1};
             int hp_part{-1};
             uint64_t klass{0};
@@ -658,6 +676,8 @@ namespace player {
         };
         std::vector<slot> slots;
     };
+
+    inline unsigned g_hierarchy_changes = 0;   // chains found stale by the per-frame check
 
     inline HealthInfo decode_health(uint64_t klass, uint64_t stats_class, const uint16_t* block) noexcept {
         HealthInfo out{};
@@ -671,21 +691,38 @@ namespace player {
         return out;
     }
 
+    // Pure: does the per-frame verify block still match the cached chain?
+    inline bool chain_still_valid(const hierarchy_ref& ref, const frame_batch::verify& v) noexcept {
+        if (v.data != ref.data || v.index != ref.index || v.entries != ref.entries || v.parents != ref.parents)
+            return false;
+        for (int c = 0; c < ref.chain_len; ++c) {
+            const int expected = c + 1 < ref.chain_len ? ref.chain[c + 1] : -1;
+            if (v.parent_of[c] != expected) return false;
+        }
+        return true;
+    }
+
     inline void read_frame(std::vector<frame_player>& players, frame_batch& batch) noexcept {
         const uint64_t stats_class = typeinfo(v100::stats_typeinfo);
         batch.parts.clear();
         batch.slots.assign(players.size(), frame_batch::slot{});
-        // Sizes first: entries must not reallocate after parts point into it.
-        size_t entry_count = 0;
+        // Sizes first: entries/verifies must not reallocate after parts point into them.
+        size_t entry_count = 0, verify_count = 0;
         for (size_t i = 0; i < players.size(); ++i) {
             frame_batch::slot& s = batch.slots[i];
             s.cache = pose_entry(*players[i].snap);
             if (!s.cache) continue;
             for (int r = 0; r < s.cache->count; ++r)
-                if (s.cache->refs[r].valid && s.cache->refs[r].chain_len > 0) entry_count += size_t(s.cache->refs[r].chain_len);
+                if (s.cache->refs[r].valid && s.cache->refs[r].chain_len > 0) {
+                    entry_count += size_t(s.cache->refs[r].chain_len);
+                    ++verify_count;
+                }
         }
+        // After pose_entry(): a first revalidation may have probed the layout.
+        const TransformLayout layout = g_transform_layout;
         batch.entries.resize(entry_count);
-        size_t next_entry = 0;
+        batch.verifies.assign(verify_count, frame_batch::verify{});
+        size_t next_entry = 0, next_verify = 0;
         for (size_t i = 0; i < players.size(); ++i) {
             frame_batch::slot& s = batch.slots[i];
             const player_snapshot& p = *players[i].snap;
@@ -695,10 +732,19 @@ namespace player {
                 s.hp_part = int(batch.parts.size());
                 batch.parts.push_back({p.stats + v100::stats_hp, s.hp, sizeof(s.hp)});
             }
-            if (!s.cache) continue;
+            if (!s.cache || layout.data_offset < 0) continue;
             for (int r = 0; r < s.cache->count; ++r) {
                 const hierarchy_ref& ref = s.cache->refs[r];
                 if (!ref.valid || ref.chain_len <= 0) continue;
+                frame_batch::verify& v = batch.verifies[next_verify];
+                s.ref_verify[r] = int(next_verify++);
+                s.ref_verify_part[r] = int(batch.parts.size());
+                batch.parts.push_back({ref.native + uint64_t(layout.data_offset), &v.data, sizeof(v.data)});
+                batch.parts.push_back({ref.native + uint64_t(layout.index_offset), &v.index, sizeof(v.index)});
+                batch.parts.push_back({ref.data + uint64_t(layout.entries_offset), &v.entries, sizeof(v.entries)});
+                batch.parts.push_back({ref.data + uint64_t(layout.parents_offset), &v.parents, sizeof(v.parents)});
+                for (int c = 0; c < ref.chain_len; ++c)
+                    batch.parts.push_back({ref.parents + uint64_t(ref.chain[c]) * sizeof(int32_t), &v.parent_of[c], sizeof(int32_t)});
                 s.ref_first[r] = int(next_entry);
                 s.ref_part[r] = int(batch.parts.size());
                 for (int c = 0; c < ref.chain_len; ++c) {
@@ -720,6 +766,7 @@ namespace player {
             frame_batch::slot& s = batch.slots[i];
             frame_player& fp = players[i];
             fp.health = {};
+            fp.rebuilt = false;
             if (fp.want_health && part_ok(s.klass_part) && part_ok(s.hp_part))
                 fp.health = decode_health(s.klass, stats_class, s.hp);
             fp.pose = {};
@@ -730,11 +777,16 @@ namespace player {
             if (fp.want_health && !(fp.health.valid && fp.health.hp > 0)) continue;
             transform_cache_entry& entry = *s.cache;
             bool fast = entry.count > 0;
+            bool stale = false;
             Vector3 points[2]{};
             for (int r = 0; r < entry.count && fast; ++r) {
                 const int first = s.ref_first[r];
                 if (first < 0) { fast = false; break; }
-                const int len = entry.refs[r].chain_len;
+                const hierarchy_ref& ref = entry.refs[r];
+                const int len = ref.chain_len;
+                const int vp = s.ref_verify_part[r];
+                for (int k = 0; k < 4 + len && fast; ++k) fast = part_ok(vp + k);
+                if (fast && !chain_still_valid(ref, batch.verifies[size_t(s.ref_verify[r])])) { stale = true; fast = false; break; }
                 for (int c = 0; c < len && fast; ++c) fast = part_ok(s.ref_part[r] + c);
                 fast = fast && compose_chain(&batch.entries[size_t(first)], len, points[r]);
             }
@@ -743,9 +795,19 @@ namespace player {
                 entry.last_feet = candidate.feet;
                 entry.has_last = true;
                 fp.pose = candidate;
-            } else {
-                fp.pose = pose(*fp.snap);
+                continue;
             }
+            if (stale) {
+                // Re-resolve now instead of at the next 500 ms revalidation.
+                ++g_hierarchy_changes;
+                fp.rebuilt = true;
+                entry.validated_us = 0;
+                static long long stale_log = 0;
+                if (diag::every(stale_log, 2000))
+                    diag::log("POSE", "transform hierarchy changed under player 0x%llx, chain re-resolved (total %u)",
+                              (unsigned long long)fp.snap->object, g_hierarchy_changes);
+            }
+            fp.pose = pose(*fp.snap);
         }
     }
 

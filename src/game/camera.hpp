@@ -64,7 +64,6 @@ namespace cam {
     // nothing. The bor *contents* are still read fresh where they are used.
     inline main_chain g_chain_cache{};
     inline long long g_chain_cache_ms = 0;
-    inline long long g_last_wrapper_check = 0;
     inline long long g_last_probe = 0;
     inline long long g_last_chain_log = 0;
     inline long long g_last_lock_log = 0;
@@ -293,29 +292,44 @@ namespace cam {
         if (g_lock.pid != proc::pid) g_lock = {};
         if (!g_lock.managed) return false;
         const bool strict = diag::now_ms() < g_strict_until_ms;
-        uint64_t native = g_lock.native;
-        bool wrapper_ok = true;
-        if (strict || diag::every(g_last_wrapper_check, 250))
-            wrapper_ok = g_lock_camera_class && managed_to_native(g_lock.managed, g_lock_camera_class, native) &&
-                         native == g_lock.native;
-        if (!wrapper_ok ||
-            !read_matrix_pair(native, g_lock.view_off, g_lock.proj_off, candidate.view, candidate.projection)) {
-            diag::log("CAMERA", "camera lock lost managed=0x%llx native=0x%llx (wrapper/native/matrices invalid)",
-                      (unsigned long long)g_lock.managed, (unsigned long long)g_lock.native);
+        // Wrapper klass, m_CachedPtr and both matrices in one call, every
+        // frame: a destroyed or recycled Camera is dropped on the frame it
+        // happens instead of drawing through foreign matrices.
+        uint64_t klass = 0, native = 0;
+        const read_part parts[] = {
+            {g_lock.managed, &klass, sizeof(klass)},
+            {g_lock.managed + v100::unity_cached_ptr, &native, sizeof(native)},
+            {g_lock.native + uint64_t(g_lock.view_off), &candidate.view, sizeof(candidate.view)},
+            {g_lock.native + uint64_t(g_lock.proj_off), &candidate.projection, sizeof(candidate.projection)},
+        };
+        const char* why = nullptr;
+        if (!mem_read_scatter(parts, 4)) why = "read failed";
+        else if (!g_lock_camera_class || klass != g_lock_camera_class) why = "wrapper klass changed";
+        else if (native != g_lock.native) why = "m_CachedPtr changed";
+        else if (!matrix_window_sane(reinterpret_cast<const float*>(&candidate.view), true) ||
+                 !matrix_window_sane(reinterpret_cast<const float*>(&candidate.projection), false)) why = "matrices not sane";
+        if (why) {
+            diag::log("CAMERA", "camera lock lost managed=0x%llx native=0x%llx (%s)",
+                      (unsigned long long)g_lock.managed, (unsigned long long)g_lock.native, why);
             g_lock = {};
+            g_last_probe = 0;   // try to re-acquire on this very frame
             scanner::request_rescan();
             return false;
         }
-        if (strict || diag::every(g_last_bor_check, 250)) {
+        // A camera 3 m away from the MainCamera state is not the gameplay
+        // camera (the bor lags at most a tick, ~0.2 m at running speed).
+        // Checked every 100 ms and dropped after 3 checks in a row (~300 ms);
+        // the old 8 checks at 250 ms drew through a wrong camera for 2 s.
+        if (strict || diag::every(g_last_bor_check, 100)) {
             const bor_pose pose = read_bor(chain.main_bor);
             if (pose.valid) {
                 const float d = distance(position_from_view(candidate.view), pose.position);
                 if (d > 3.0f) {
-                    // ~90 frames at 250 ms checks == 22 s was too slow; 8 checks == 2 s.
-                    if (++g_lock.mismatch_frames > (strict ? 0 : 8)) {
+                    if (++g_lock.mismatch_frames >= (strict ? 1 : 3)) {
                         diag::log("CAMERA", "camera lock dropped: native camera %.1f m away from MainCamera bor for %d checks",
                                   d, g_lock.mismatch_frames);
                         g_lock = {};
+                        g_last_probe = 0;
                         scanner::request_rescan();
                         return false;
                     }
