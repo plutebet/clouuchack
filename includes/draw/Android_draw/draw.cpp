@@ -72,8 +72,23 @@ bool init_egl(uint32_t _screen_x, uint32_t _screen_y, bool log) {
         return false;
     }
 
-    EGLint num_config = 0;
-    const EGLint attribList[] = {
+    // RGBA8888 without depth/stencil. ImGui never uses depth or stencil, but
+    // a full-screen D16S8 attachment that glClear(COLOR) does not touch is
+    // loaded and stored by tiled GPUs every frame: pure bandwidth taken from
+    // the game. The old 5/6/5 + depth/stencil list stays as a fallback for
+    // drivers that expose no such config.
+    const EGLint preferred_attribs[] = {
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_RED_SIZE, 8,
+        EGL_GREEN_SIZE, 8,
+        EGL_BLUE_SIZE, 8,
+        EGL_ALPHA_SIZE, 8,
+        EGL_DEPTH_SIZE, 0,
+        EGL_STENCIL_SIZE, 0,
+        EGL_NONE
+    };
+    const EGLint legacy_attribs[] = {
         EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
         EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
         EGL_BLUE_SIZE, 5,
@@ -90,8 +105,34 @@ bool init_egl(uint32_t _screen_x, uint32_t _screen_y, bool log) {
         EGL_NONE
     };
 
-    if (eglChooseConfig(display, attribList, &config, 1, &num_config) != EGL_TRUE || num_config < 1) {
-        return false;
+    // "At least 0" still admits configs with depth; take the first exact
+    // RGBA8888/D0S0 one among the matches.
+    bool have_config = false;
+    {
+        EGLConfig configs[32];
+        EGLint count = 0;
+        if (eglChooseConfig(display, preferred_attribs, configs, 32, &count) == EGL_TRUE) {
+            for (EGLint i = 0; i < count && !have_config; ++i) {
+                EGLint r = 0, g = 0, b = 0, a = 0, d = -1, s = -1;
+                eglGetConfigAttrib(display, configs[i], EGL_RED_SIZE, &r);
+                eglGetConfigAttrib(display, configs[i], EGL_GREEN_SIZE, &g);
+                eglGetConfigAttrib(display, configs[i], EGL_BLUE_SIZE, &b);
+                eglGetConfigAttrib(display, configs[i], EGL_ALPHA_SIZE, &a);
+                eglGetConfigAttrib(display, configs[i], EGL_DEPTH_SIZE, &d);
+                eglGetConfigAttrib(display, configs[i], EGL_STENCIL_SIZE, &s);
+                if (r == 8 && g == 8 && b == 8 && a == 8 && d == 0 && s == 0) {
+                    config = configs[i];
+                    have_config = true;
+                }
+            }
+        }
+    }
+    g_egl_lean_config = have_config;
+    if (!have_config) {
+        EGLint num_config = 0;
+        if (eglChooseConfig(display, legacy_attribs, &config, 1, &num_config) != EGL_TRUE || num_config < 1) {
+            return false;
+        }
     }
 
     EGLint egl_format = 0;
@@ -114,6 +155,9 @@ bool init_egl(uint32_t _screen_x, uint32_t _screen_y, bool log) {
     if (!eglMakeCurrent(display, surface, surface, context)) {
         return false;
     }
+    // One buffer per vsync at most; the main loop paces itself on this.
+    eglSwapInterval(display, 1);
+    g_present_gate.invalidate();
 
     return true;
 }
@@ -220,8 +264,26 @@ bool ImGui_init() {
     return true;
 }
 
+// Display state through SurfaceComposerClient costs up to three binder calls
+// into SurfaceFlinger (display ids, token, state). Every frame that was ~360
+// transactions a second against the process composing the game's frames.
+// Rotation is detected within 250 ms this way. A failed query (returns
+// zeros) keeps the last good state: before, one failed call reported
+// orientation 0 and hid the ESP and the menu for that frame.
+static long long g_last_display_query_ms = 0;
+static long long mono_ms() {
+    struct timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
 void drawBegin() {
-    screen_config();
+    const long long now = mono_ms();
+    if (now - g_last_display_query_ms >= 250) {
+        g_last_display_query_ms = now;
+        const android::ANativeWindowCreator::DisplayInfo info = android::ANativeWindowCreator::GetDisplayInfo();
+        if (info.width > 0 && info.height > 0) displayInfo = info;
+    }
     if (::orientation != displayInfo.orientation) {
         ::orientation = displayInfo.orientation;
         touch::update(displayInfo.width, displayInfo.height, displayInfo.orientation);
@@ -240,20 +302,49 @@ unsigned g_swap_failures = 0;
 unsigned g_swap_consecutive_failures = 0;
 unsigned g_swap_last_error = 0;
 
-void drawEnd() {
-    if (display == EGL_NO_DISPLAY || surface == EGL_NO_SURFACE || context == EGL_NO_CONTEXT) return;
+present::gate g_present_gate;
+bool g_egl_lean_config = false;
+
+// Everything that decides what reaches the screen: geometry, colours, UVs,
+// textures and clip rects of every draw command.
+static uint64_t draw_data_hash(const ImDrawData* data) {
+    uint64_t h = present::k_hash_seed;
+    if (!data || !data->Valid) return h;
+    h = present::hash_bytes(h, &data->DisplaySize, sizeof(data->DisplaySize));
+    for (int n = 0; n < data->CmdListsCount; ++n) {
+        const ImDrawList* list = data->CmdLists[n];
+        h = present::hash_bytes(h, list->VtxBuffer.Data, size_t(list->VtxBuffer.Size) * sizeof(ImDrawVert));
+        h = present::hash_bytes(h, list->IdxBuffer.Data, size_t(list->IdxBuffer.Size) * sizeof(ImDrawIdx));
+        for (const ImDrawCmd& cmd : list->CmdBuffer) {
+            h = present::hash_bytes(h, &cmd.ClipRect, sizeof(cmd.ClipRect));
+            h = present::hash_bytes(h, &cmd.TextureId, sizeof(cmd.TextureId));
+            const unsigned offsets[3] = {cmd.VtxOffset, cmd.IdxOffset, cmd.ElemCount};
+            h = present::hash_bytes(h, offsets, sizeof(offsets));
+        }
+    }
+    return h;
+}
+
+bool drawEnd() {
+    if (display == EGL_NO_DISPLAY || surface == EGL_NO_SURFACE || context == EGL_NO_CONTEXT) return false;
     ImGui::Render();
+    const uint64_t frame_hash = draw_data_hash(ImGui::GetDrawData());
+    const long long now = mono_ms();
+    if (!g_present_gate.should_present(frame_hash, now)) return false;
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     if (eglSwapBuffers(display, surface) == EGL_TRUE) {
         g_swap_consecutive_failures = 0;
+        g_present_gate.presented(frame_hash, now);
     } else {
         // Lost surface/context (display reconfiguration). main() restarts the
         // overlay through the supervisor once this persists.
         ++g_swap_failures;
         ++g_swap_consecutive_failures;
         g_swap_last_error = unsigned(eglGetError());
+        g_present_gate.invalidate();
     }
+    return true;
 }
 
 void shutdown() {

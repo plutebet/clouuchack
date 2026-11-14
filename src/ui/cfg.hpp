@@ -23,9 +23,12 @@ namespace esp {
     inline bool weapon = true;
     inline int box_type = 0;
     inline float box_rounding = 0.f;
-    // Interpolate enemy positions between game frames (one game frame of
-    // delay, no stepping when the overlay runs faster than the game).
-    inline bool smooth = true;
+    // Off (default): boxes are drawn from the latest game frame and the
+    // overlay only presents when that frame changed, so it updates in step
+    // with the game model and costs no presents while nothing moves.
+    // On: enemy positions are interpolated between game frames (one game
+    // frame of delay) and the overlay presents at the display rate.
+    inline bool smooth = false;
     // cloudhack default: red (240,64,90); the menu Color row drives box/health.
     inline ImVec4 box_col = ImVec4(240/255.f, 64/255.f, 90/255.f, 1.f);
     inline ImVec4 name_col = ImVec4(1.f, 1.f, 1.f, 1.f);

@@ -59,6 +59,12 @@ namespace cam {
     inline native_lock g_lock;
     inline uint64_t g_chain_player = 0;
     inline uint64_t g_chain_presentation = 0;
+    // The chc -> PlayerAnimationData -> bor pointers live as long as the
+    // local player object; re-reading them (6 reads) every frame bought
+    // nothing. The bor *contents* are still read fresh where they are used.
+    inline main_chain g_chain_cache{};
+    inline long long g_chain_cache_ms = 0;
+    inline long long g_last_wrapper_check = 0;
     inline long long g_last_probe = 0;
     inline long long g_last_chain_log = 0;
     inline long long g_last_lock_log = 0;
@@ -67,6 +73,8 @@ namespace cam {
         g_lock = {};
         g_chain_player = 0;
         g_chain_presentation = 0;
+        g_chain_cache = {};
+        g_chain_cache_ms = 0;
         player::g_transform_cache.clear();
     }
 
@@ -133,6 +141,9 @@ namespace cam {
 
     // chc lookup is cached per local player and revalidated with one read.
     inline main_chain resolve_chain(uint64_t local_player) {
+        const long long now = diag::now_ms();
+        if (g_chain_player == local_player && g_chain_cache.animation && now - g_chain_cache_ms < 250)
+            return g_chain_cache;
         main_chain chain{};
         const uint64_t chc_class = typeinfo(v100::presentation_typeinfo);
         const uint64_t animation_class = typeinfo(v100::animation_data_typeinfo);
@@ -151,6 +162,8 @@ namespace cam {
         chain.first_person = rpm<uint8_t>(animation + v100::animation_is_first_person) != 0;
         if (!obj_ptr(chain.main_bor)) chain.main_bor = 0;
         if (!obj_ptr(chain.arms_bor)) chain.arms_bor = 0;
+        g_chain_cache = chain;
+        g_chain_cache_ms = now;
         if (diag::every(g_last_chain_log, 5000))
             diag::log("CAMERA", "chain local=0x%llx chc=0x%llx animation=0x%llx mainBor=0x%llx armsBor=0x%llx firstPerson=%d",
                       (unsigned long long)local_player, (unsigned long long)chain.presentation,
@@ -271,14 +284,21 @@ namespace cam {
         return read_matrix_pair(g_lock.native, g_lock.view_off, g_lock.proj_off, view, projection);
     }
 
-    // Validate the lock and re-read its matrices: 4 reads per frame
-    // (wrapper klass, m_CachedPtr, view, projection); bor divergence check
-    // every 250 ms.
+    // Re-read the locked matrices: one scatter read per frame. The wrapper
+    // (klass + m_CachedPtr, 2 reads) is re-validated every 250 ms and the
+    // matrices pass the view/projection sanity check every frame, so a
+    // destroyed camera is dropped by whichever notices first. bor divergence
+    // check every 250 ms (every frame for 3 s after a new match).
     inline bool refresh_lock(const main_chain& chain, camera_candidate& candidate) {
         if (g_lock.pid != proc::pid) g_lock = {};
         if (!g_lock.managed) return false;
-        uint64_t native = 0;
-        if (!g_lock_camera_class || !managed_to_native(g_lock.managed, g_lock_camera_class, native) || native != g_lock.native ||
+        const bool strict = diag::now_ms() < g_strict_until_ms;
+        uint64_t native = g_lock.native;
+        bool wrapper_ok = true;
+        if (strict || diag::every(g_last_wrapper_check, 250))
+            wrapper_ok = g_lock_camera_class && managed_to_native(g_lock.managed, g_lock_camera_class, native) &&
+                         native == g_lock.native;
+        if (!wrapper_ok ||
             !read_matrix_pair(native, g_lock.view_off, g_lock.proj_off, candidate.view, candidate.projection)) {
             diag::log("CAMERA", "camera lock lost managed=0x%llx native=0x%llx (wrapper/native/matrices invalid)",
                       (unsigned long long)g_lock.managed, (unsigned long long)g_lock.native);
@@ -286,7 +306,6 @@ namespace cam {
             scanner::request_rescan();
             return false;
         }
-        const bool strict = diag::now_ms() < g_strict_until_ms;
         if (strict || diag::every(g_last_bor_check, 250)) {
             const bor_pose pose = read_bor(chain.main_bor);
             if (pose.valid) {

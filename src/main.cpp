@@ -12,6 +12,7 @@
 #include "other/memory.hpp"
 #include "other/status.hpp"
 #include "other/crash.hpp"
+#include "other/cpu_affinity.hpp"
 #include "game/game.hpp"
 #include "game/camera.hpp"
 #include "func/visuals.hpp"
@@ -58,6 +59,7 @@ struct options {
     bool skip_build_check = false;
     bool no_lock = false;
     bool no_supervisor = false;
+    bool no_pin = false;
     const char* log_path = "/data/local/tmp/bycmd.log";
     const char* crash_log_path = "/data/local/tmp/bycmd-crash.log";
 };
@@ -78,6 +80,7 @@ static void usage() {
                 "  --skip-build-check  run even if libunity build-id does not match the profile\n"
                 "  --no-lock           ignore the single-instance lock\n"
                 "  --no-supervisor     run the overlay in this process (no auto-restart)\n"
+                "  --no-pin            do not move the overlay to the efficiency CPU cluster\n"
                 "  --log <path>        log file (default /data/local/tmp/bycmd.log)\n"
                 "  --crash-log <path>  crash record file (default /data/local/tmp/bycmd-crash.log)\n");
 }
@@ -155,6 +158,9 @@ static int run_overlay(const options& opts) {
     const int instance_lock = acquire_lock(opts);
     if (instance_lock == -2) return exit_duplicate;
 
+    // Before any thread exists: EGL driver, touch and scanner threads inherit it.
+    if (!opts.no_pin) affinity::pin_to_efficiency_cluster();
+
     // ---- display ----
     crash::stage("display");
     for (int attempt = 0; attempt < 30; ++attempt) {
@@ -217,7 +223,8 @@ static int run_overlay(const options& opts) {
         diag::log("ERROR", "initGUI_draw failed (overlay surface / EGL / fonts)");
         return exit_init;
     }
-    diag::log("INFO", "GUI initialized");
+    diag::log("INFO", "GUI initialized (egl config %s)",
+              g_egl_lean_config ? "RGBA8888 no depth/stencil" : "legacy with depth/stencil");
 
     if (!touch::init(max_size, min_size, (uint8_t)displayInfo.orientation))
         diag::log("WARN", "no touch device readable in /dev/input; menu cannot be operated");
@@ -246,6 +253,8 @@ static int run_overlay(const options& opts) {
     unsigned period_index = 0;
     bool periods_full = false;
     unsigned swap_failures_seen = 0;
+    bool prev_swapped = false;
+    unsigned skipped_reported = 0;
 
     int exit_code = exit_ok;
     while (!g_quit && !status::g_quit_request) {
@@ -321,7 +330,7 @@ static int run_overlay(const options& opts) {
         crash::stage("render");
         const long long before_swap_us = diag::now_us();
         beat(1);
-        drawEnd();
+        const bool swapped = drawEnd();
         beat(0);
         const long long after_swap_us = diag::now_us();
         if (g_hb && !g_hb->first_frame.load()) g_hb->first_frame.store(1);
@@ -344,11 +353,14 @@ static int run_overlay(const options& opts) {
         // (8.3 ms at 120 Hz, 6.9 ms at 144 Hz). Sleep period - work - margin
         // and read the game as late as possible; the margin adapts to the
         // observed miss rate (a return after > 1.6 periods == missed vsync).
+        // A skipped present (frame identical to the screen) does not block
+        // on vsync, so only two swaps in a row measure the display period.
         work_ms = work_ms * 0.9 + double(before_swap_us - frame_start_us) / 1000.0 * 0.1;
         const double swap_period = double(after_swap_us - last_swap_us) / 1000.0;
-        last_swap_us = after_swap_us;
-        ++frames;
-        if (swap_period > 2.0 && swap_period < 50.0) {
+        const bool measured = swapped && prev_swapped;
+        if (swapped) { last_swap_us = after_swap_us; ++frames; }
+        prev_swapped = swapped;
+        if (measured && swap_period > 2.0 && swap_period < 50.0) {
             if (swap_period > period_ms * 1.6 && run) ++missed;
             periods[period_index] = swap_period;
             period_index = (period_index + 1) % 32;
@@ -364,15 +376,22 @@ static int run_overlay(const options& opts) {
             const double miss_rate = frames ? double(missed) / double(frames) : 0.0;
             if (miss_rate > 0.03) margin_ms = std::min(5.0, margin_ms + 0.5);
             else if (miss_rate < 0.005) margin_ms = std::max(1.5, margin_ms - 0.1);
+            const unsigned skipped_window = g_present_gate.skipped - skipped_reported;
+            skipped_reported = g_present_gate.skipped;
             static long long pace_log = 0;
             if (run && diag::every(pace_log, 10000))
-                diag::log("PACE", "period=%.2fms work=%.2fms margin=%.1fms missed=%u/%u", period_ms, work_ms, margin_ms, missed, frames);
+                diag::log("PACE", "period=%.2fms work=%.2fms margin=%.1fms missed=%u/%u (last 2 s: presented=%u skipped=%u)",
+                          period_ms, work_ms, margin_ms, missed, frames, frames, skipped_window);
             frames = missed = 0;
             last_pace_report = diag::now_ms();
         }
         crash::stage("sleep");
         double sleep_ms = period_ms - work_ms - margin_ms;
-        if (ui::bar::g_open) sleep_ms = std::min(sleep_ms, 2.0);
+        // An open menu relies on the blocking swap for pacing; a skipped
+        // present did not block, so that frame sleeps the rest of the period
+        // itself (otherwise a static open menu would spin the loop).
+        if (ui::bar::g_open && swapped) sleep_ms = std::min(sleep_ms, 2.0);
+        if (!swapped) sleep_ms = std::max(1.0, period_ms - work_ms);
         if (!run) sleep_ms = std::max(sleep_ms, 8.0);
         if (sleep_ms > 0.3) usleep(useconds_t(sleep_ms * 1000.0));
     }
@@ -515,6 +534,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--skip-build-check")) opts.skip_build_check = true;
         else if (!std::strcmp(argv[i], "--no-lock")) opts.no_lock = true;
         else if (!std::strcmp(argv[i], "--no-supervisor")) opts.no_supervisor = true;
+        else if (!std::strcmp(argv[i], "--no-pin")) opts.no_pin = true;
         else if (!std::strcmp(argv[i], "--log") && i + 1 < argc) opts.log_path = argv[++i];
         else if (!std::strcmp(argv[i], "--crash-log") && i + 1 < argc) opts.crash_log_path = argv[++i];
         else if (!std::strcmp(argv[i], "--help") || !std::strcmp(argv[i], "-h")) { usage(); return 0; }

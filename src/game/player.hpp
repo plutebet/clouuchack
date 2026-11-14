@@ -11,6 +11,8 @@
 #include "../other/vector3.h"
 #include "../ui/theme/theme.hpp"
 #include <cmath>
+#include <memory>
+#include <vector>
 
 namespace player {
     struct TransformEntry { Vector4 position; Vector4 rotation; Vector4 scale; };
@@ -492,6 +494,24 @@ namespace player {
         return true;
     }
 
+    // World position from local TRS entries ordered self first, root last.
+    // Pure: shared by the per-transform path and the per-frame batch.
+    inline bool compose_chain(const TransformEntry* chain, int len, Vector3& out) noexcept {
+        if (len <= 0 || !entry_valid(chain[0])) return false;
+        Vector3 result(chain[0].position.x, chain[0].position.y, chain[0].position.z);
+        for (int i = 1; i < len; ++i) {
+            const TransformEntry& entry = chain[i];
+            if (!entry_valid(entry)) return false;
+            Vector3 scaled(result.x * entry.scale.x, result.y * entry.scale.y, result.z * entry.scale.z);
+            result = rotate(entry.rotation, scaled) + Vector3(entry.position.x, entry.position.y, entry.position.z);
+        }
+        if (!std::isfinite(result.x) || !std::isfinite(result.y) || !std::isfinite(result.z) ||
+            std::fabs(result.x) > 100000.f || std::fabs(result.y) > 100000.f || std::fabs(result.z) > 100000.f)
+            return false;
+        out = result;
+        return true;
+    }
+
     inline bool hierarchy_position(const hierarchy_ref& ref, Vector3& out) noexcept {
         if (!ref.valid) return false;
         if (ref.chain_len > 0) {
@@ -500,19 +520,7 @@ namespace player {
             for (int i = 0; i < ref.chain_len; ++i)
                 parts[i] = {ref.entries + uint64_t(ref.chain[i]) * sizeof(TransformEntry), &chain[i], sizeof(TransformEntry)};
             if (!mem_read_scatter(parts, size_t(ref.chain_len))) return false;
-            if (!entry_valid(chain[0])) return false;
-            Vector3 result(chain[0].position.x, chain[0].position.y, chain[0].position.z);
-            for (int i = 1; i < ref.chain_len; ++i) {
-                const TransformEntry& entry = chain[i];
-                if (!entry_valid(entry)) return false;
-                Vector3 scaled(result.x * entry.scale.x, result.y * entry.scale.y, result.z * entry.scale.z);
-                result = rotate(entry.rotation, scaled) + Vector3(entry.position.x, entry.position.y, entry.position.z);
-            }
-            if (!std::isfinite(result.x) || !std::isfinite(result.y) || !std::isfinite(result.z) ||
-                std::fabs(result.x) > 100000.f || std::fabs(result.y) > 100000.f || std::fabs(result.z) > 100000.f)
-                return false;
-            out = result;
-            return true;
+            return compose_chain(chain, ref.chain_len, out);
         }
         TransformEntry current{};
         if (!mem_read(ref.entries + uint64_t(ref.index) * sizeof(TransformEntry), &current, sizeof(current)) ||
@@ -555,45 +563,190 @@ namespace player {
         return entry.count > 0;
     }
 
-    inline PlayerPose pose(const player_snapshot& p) noexcept {
-        PlayerPose out{};
-        if (!obj_ptr(p.transform)) { forget(p.object); return out; } // despawned / dead NetObject
+    // Feet = lowest, head = highest of the player's transform points; points
+    // at the origin (unset transforms) are ignored. Pure.
+    inline bool pose_from_points(const Vector3* points, int count, PlayerPose& out) noexcept {
+        bool found = false;
+        Vector3 min_point{}, max_point{};
+        for (int i = 0; i < count; ++i) {
+            const Vector3& point = points[i];
+            if (std::fabs(point.x) < .001f && std::fabs(point.y) < .001f && std::fabs(point.z) < .001f) continue;
+            if (!found || point.y < min_point.y) min_point = point;
+            if (!found || point.y > max_point.y) max_point = point;
+            found = true;
+        }
+        if (!found) return false;
+        out.feet = min_point;
+        out.head = max_point;
+        out.valid = true;
+        const float span = max_point.y - min_point.y;
+        out.has_head = span >= 0.35f && span <= 2.5f;
+        if (!out.has_head) out.head = min_point + Vector3(0.f, 1.67f, 0.f);
+        return true;
+    }
+
+    // A hierarchy rebuild (index reuse) shows up as a teleport.
+    inline bool pose_jumped(const transform_cache_entry& entry, const Vector3& feet) noexcept {
+        return entry.has_last &&
+            (std::fabs(feet.x - entry.last_feet.x) > 12.f ||
+             std::fabs(feet.y - entry.last_feet.y) > 12.f ||
+             std::fabs(feet.z - entry.last_feet.z) > 12.f);
+    }
+
+    // Cache entry of a player, revalidated every 500 ms; null when the
+    // player has no live transform component.
+    inline transform_cache_entry* pose_entry(const player_snapshot& p) noexcept {
+        if (!obj_ptr(p.transform)) { forget(p.object); return nullptr; } // despawned / dead NetObject
         transform_cache_entry& entry = g_transform_cache[p.object];
         const long long now = diag::now_us();
         if (entry.mtc != p.transform || now - entry.validated_us > 500000)
             revalidate(p, entry);
+        return &entry;
+    }
+
+    inline PlayerPose pose(const player_snapshot& p) noexcept {
+        PlayerPose out{};
+        transform_cache_entry* cached = pose_entry(p);
+        if (!cached) return out;
+        transform_cache_entry& entry = *cached;
         for (int attempt = 0; attempt < 2; ++attempt) {
-            bool found = false;
-            float min_y = 1.0e30f, max_y = -1.0e30f;
-            Vector3 min_point{}, max_point{};
-            for (int i = 0; i < entry.count; ++i) {
-                Vector3 point{};
-                if (!hierarchy_position(entry.refs[i], point)) { found = false; break; }
-                if (std::fabs(point.x) < .001f && std::fabs(point.y) < .001f && std::fabs(point.z) < .001f) continue;
-                if (!found || point.y < min_y) { min_y = point.y; min_point = point; }
-                if (!found || point.y > max_y) { max_y = point.y; max_point = point; }
-                found = true;
-            }
-            // A hierarchy rebuild (index reuse) shows up as a teleport; re-resolve once.
-            const bool jump = found && entry.has_last &&
-                (std::fabs(min_point.x - entry.last_feet.x) > 12.f ||
-                 std::fabs(min_point.y - entry.last_feet.y) > 12.f ||
-                 std::fabs(min_point.z - entry.last_feet.z) > 12.f);
-            if (found && (!jump || attempt == 1)) {
-                out.feet = min_point;
-                out.head = max_point;
-                out.valid = true;
-                const float span = max_point.y - min_point.y;
-                out.has_head = span >= 0.35f && span <= 2.5f;
-                if (!out.has_head) out.head = min_point + Vector3(0.f, 1.67f, 0.f);
-                entry.last_feet = min_point;
+            Vector3 points[2]{};
+            bool read_all = entry.count > 0;
+            for (int i = 0; i < entry.count && read_all; ++i)
+                read_all = hierarchy_position(entry.refs[i], points[i]);
+            PlayerPose candidate{};
+            const bool found = read_all && pose_from_points(points, entry.count, candidate);
+            // A teleport re-resolves once; the second attempt is accepted.
+            if (found && (!pose_jumped(entry, candidate.feet) || attempt == 1)) {
+                entry.last_feet = candidate.feet;
                 entry.has_last = true;
-                return out;
+                return candidate;
             }
             if (!revalidate(p, entry)) break;
         }
         entry.has_last = false;
         return out;
+    }
+
+    // ---- per-frame batch -------------------------------------------------
+    // Pose and health of every player in one pass: the stats klass word, the
+    // hp block and every TRS entry of both transform chains go out as one
+    // scatter list (64 parts per process_vm_readv). The old path issued four
+    // separate calls per player per frame, each taking the game's mmap lock.
+    // A player whose cache has no resolved chain, whose read failed or whose
+    // feet jumped falls back to pose(), which re-resolves exactly as before.
+    struct frame_player {
+        const player_snapshot* snap{nullptr};
+        bool want_health{true};
+        PlayerPose pose{};
+        HealthInfo health{};
+    };
+
+    struct frame_batch {
+        std::vector<read_part> parts;
+        std::vector<TransformEntry> entries;
+        std::unique_ptr<bool[]> ok; // vector<bool> has no data()
+        size_t ok_capacity{0};
+        struct slot {
+            transform_cache_entry* cache{nullptr};
+            int ref_first[2]{-1, -1};  // index of the first TRS entry per ref, -1 = slow path
+            int ref_part[2]{-1, -1};   // index of that entry's part; a ref's parts are contiguous
+            int klass_part{-1};
+            int hp_part{-1};
+            uint64_t klass{0};
+            uint16_t hp[3]{};
+        };
+        std::vector<slot> slots;
+    };
+
+    inline HealthInfo decode_health(uint64_t klass, uint64_t stats_class, const uint16_t* block) noexcept {
+        HealthInfo out{};
+        if (!stats_class || klass != stats_class) return out;
+        const uint16_t hp = block[0];
+        const uint16_t max_hp = block[(v100::stats_max_hp - v100::stats_hp) / 2];
+        if (max_hp == 0 || max_hp > 1000 || max_hp == 0xFFFFU || hp == 0xFFFFU || hp > max_hp) return out;
+        out.hp = int(hp);
+        out.max_hp = int(max_hp);
+        out.valid = true;
+        return out;
+    }
+
+    inline void read_frame(std::vector<frame_player>& players, frame_batch& batch) noexcept {
+        const uint64_t stats_class = typeinfo(v100::stats_typeinfo);
+        batch.parts.clear();
+        batch.slots.assign(players.size(), frame_batch::slot{});
+        // Sizes first: entries must not reallocate after parts point into it.
+        size_t entry_count = 0;
+        for (size_t i = 0; i < players.size(); ++i) {
+            frame_batch::slot& s = batch.slots[i];
+            s.cache = pose_entry(*players[i].snap);
+            if (!s.cache) continue;
+            for (int r = 0; r < s.cache->count; ++r)
+                if (s.cache->refs[r].valid && s.cache->refs[r].chain_len > 0) entry_count += size_t(s.cache->refs[r].chain_len);
+        }
+        batch.entries.resize(entry_count);
+        size_t next_entry = 0;
+        for (size_t i = 0; i < players.size(); ++i) {
+            frame_batch::slot& s = batch.slots[i];
+            const player_snapshot& p = *players[i].snap;
+            if (players[i].want_health && obj_ptr(p.stats)) {
+                s.klass_part = int(batch.parts.size());
+                batch.parts.push_back({p.stats, &s.klass, sizeof(s.klass)});
+                s.hp_part = int(batch.parts.size());
+                batch.parts.push_back({p.stats + v100::stats_hp, s.hp, sizeof(s.hp)});
+            }
+            if (!s.cache) continue;
+            for (int r = 0; r < s.cache->count; ++r) {
+                const hierarchy_ref& ref = s.cache->refs[r];
+                if (!ref.valid || ref.chain_len <= 0) continue;
+                s.ref_first[r] = int(next_entry);
+                s.ref_part[r] = int(batch.parts.size());
+                for (int c = 0; c < ref.chain_len; ++c) {
+                    batch.parts.push_back({ref.entries + uint64_t(ref.chain[c]) * sizeof(TransformEntry),
+                                           &batch.entries[next_entry + size_t(c)], sizeof(TransformEntry)});
+                }
+                next_entry += size_t(ref.chain_len);
+            }
+        }
+        if (batch.ok_capacity < batch.parts.size()) {
+            batch.ok_capacity = batch.parts.size() * 2;
+            batch.ok.reset(new bool[batch.ok_capacity]);
+        }
+        if (!batch.parts.empty())
+            mem_read_batch(batch.parts.data(), batch.parts.size(), batch.ok.get());
+
+        auto part_ok = [&](int index) { return index >= 0 && size_t(index) < batch.parts.size() && batch.ok[size_t(index)]; };
+        for (size_t i = 0; i < players.size(); ++i) {
+            frame_batch::slot& s = batch.slots[i];
+            frame_player& fp = players[i];
+            fp.health = {};
+            if (fp.want_health && part_ok(s.klass_part) && part_ok(s.hp_part))
+                fp.health = decode_health(s.klass, stats_class, s.hp);
+            fp.pose = {};
+            if (!s.cache) continue;
+            // Dead or unreadable HP: the caller drops the player anyway, and
+            // a dead body's stale hierarchy must not trigger the slow
+            // re-resolve below every frame.
+            if (fp.want_health && !(fp.health.valid && fp.health.hp > 0)) continue;
+            transform_cache_entry& entry = *s.cache;
+            bool fast = entry.count > 0;
+            Vector3 points[2]{};
+            for (int r = 0; r < entry.count && fast; ++r) {
+                const int first = s.ref_first[r];
+                if (first < 0) { fast = false; break; }
+                const int len = entry.refs[r].chain_len;
+                for (int c = 0; c < len && fast; ++c) fast = part_ok(s.ref_part[r] + c);
+                fast = fast && compose_chain(&batch.entries[size_t(first)], len, points[r]);
+            }
+            PlayerPose candidate{};
+            if (fast && pose_from_points(points, entry.count, candidate) && !pose_jumped(entry, candidate.feet)) {
+                entry.last_feet = candidate.feet;
+                entry.has_last = true;
+                fp.pose = candidate;
+            } else {
+                fp.pose = pose(*fp.snap);
+            }
+        }
     }
 
     inline HealthInfo health_info(const player_snapshot& p) noexcept {

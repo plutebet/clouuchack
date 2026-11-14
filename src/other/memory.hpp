@@ -197,6 +197,15 @@ inline bool mem_read_scatter(const read_part* parts, size_t count, bool* ok = nu
     return all;
 }
 
+// Any number of parts, 64 per process_vm_readv. `ok` is required: one
+// unreadable part (despawned player) must not drop the rest of the frame.
+inline void mem_read_batch(const read_part* parts, size_t count, bool* ok) {
+    for (size_t start = 0; start < count; start += 64) {
+        const size_t n = std::min<size_t>(64, count - start);
+        mem_read_scatter(parts + start, n, ok + start);
+    }
+}
+
 inline int get_pid() {
     int pfd = sys::openat(AT_FDCWD, oxorany("/proc"), O_RDONLY | O_DIRECTORY);
     if (pfd < 0) return -1;

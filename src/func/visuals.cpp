@@ -108,10 +108,22 @@ void visuals::draw() {
     if (!any) { esp_wait("all ESP options disabled"); return; }
 
     crash::stage("esp-players");
-    const std::vector<player_snapshot> Players = players();
-    if (Players.empty()) { esp_wait("player discovery / registry scan"); return; }
     const long long now_ms = diag::now_ms();
     const long long now_us = diag::now_us();
+    // The registry walk (list, items, one 0x98 block per NetObject) runs at
+    // 10 Hz: membership, team and component pointers change on spawn/death,
+    // not per frame. HP and poses below are read every frame, and a stale
+    // stats/transform pointer fails its klass or TRS checks in that read.
+    static std::vector<player_snapshot> s_players;
+    static long long s_players_ms = 0;
+    static int s_players_pid = -1;
+    if (now_ms - s_players_ms >= 100 || s_players_pid != proc::pid) {
+        s_players = players();
+        s_players_ms = now_ms;
+        s_players_pid = proc::pid;
+    }
+    const std::vector<player_snapshot>& Players = s_players;
+    if (Players.empty()) { esp_wait("player discovery / registry scan"); return; }
 
     // Per-object caches must not outlive the match: a new match reuses heap
     // addresses, and a stale "dead since" entry would hide a live player.
@@ -175,23 +187,36 @@ void visuals::draw() {
     }
     const int LocalTeam = Local->team;
     if (LocalTeam != 1 && LocalTeam != 2) { esp_wait("local team validation"); return; }
-    const player::PlayerPose LocalPose = player::pose(*Local);
-    const Vector3 LocalPosition = LocalPose.feet;
-    if (!LocalPose.valid || !std::isfinite(LocalPosition.x) ||
-        (LocalPosition.x == 0.f && LocalPosition.y == 0.f && LocalPosition.z == 0.f)) {
-        esp_wait("local transform hierarchy"); return;
-    }
 
-    // Camera first (4 reads with a lock), then the enemy poses, then the
-    // camera again: if it changed in between, the game rendered a frame
-    // while we were reading and the poses are re-read so that box and
-    // camera describe the same frame.
+    // Camera first (one matrix read with a lock), then local + enemy poses
+    // and HP in one batched read, then the camera again: if it changed in
+    // between, the game rendered a frame while we were reading and the poses
+    // are re-read so that box and camera describe the same frame.
     crash::stage("esp-camera");
     cam::main_chain chain{};
     std::vector<camera_candidate> Cameras = cam::resolve(LocalPlayer, chain);
     if (Cameras.empty()) { g_camera = 0; esp_wait("camera resolution (controller / bor / transform)"); return; }
 
     crash::stage("esp-poses");
+    static std::vector<player::frame_player> s_frame;
+    static player::frame_batch s_batch;
+    s_frame.clear();
+    s_frame.push_back({Local, false});   // [0] = local player, pose only
+    for (const player_snapshot& p : Players) {
+        if (p.object == LocalPlayer) continue;
+        const int PlayerTeam = p.team;
+        if (PlayerTeam == LocalTeam || (PlayerTeam != 1 && PlayerTeam != 2)) continue;
+        s_frame.push_back({&p, true});
+    }
+    player::read_frame(s_frame, s_batch);
+
+    const player::PlayerPose LocalPose = s_frame[0].pose;
+    const Vector3 LocalPosition = LocalPose.feet;
+    if (!LocalPose.valid || !std::isfinite(LocalPosition.x) ||
+        (LocalPosition.x == 0.f && LocalPosition.y == 0.f && LocalPosition.z == 0.f)) {
+        esp_wait("local transform hierarchy"); return;
+    }
+
     int enemies = 0, alive = 0, positioned = 0, projected = 0;
     struct enemy_frame {
         uint64_t object{};
@@ -205,21 +230,19 @@ void visuals::draw() {
         float distance{0.f};
     };
     std::vector<enemy_frame> frame_enemies;
-    auto read_enemy_pose = [&](enemy_frame& e) -> bool {
-        const player::PlayerPose Shape = player::pose(*e.snap);
+    frame_enemies.reserve(s_frame.size());
+    auto apply_pose = [](enemy_frame& e, const player::PlayerPose& Shape) -> bool {
         if (!Shape.valid) return false;
         e.position = Shape.feet;
         e.head = Shape.has_head ? Shape.head : Shape.feet + Vector3(0.f, 1.67f, 0.f);
         e.has_head = Shape.has_head;
         return true;
     };
-    for (const player_snapshot& p : Players) {
-        if (p.object == LocalPlayer) continue;
-        const int PlayerTeam = p.team;
-        if (PlayerTeam == LocalTeam || (PlayerTeam != 1 && PlayerTeam != 2)) continue;
+    for (size_t fi = 1; fi < s_frame.size(); ++fi) {
+        const player_snapshot& p = *s_frame[fi].snap;
         ++enemies;
 
-        const player::HealthInfo Health = player::health_info(p);
+        const player::HealthInfo Health = s_frame[fi].health;
         const int hp_now = Health.valid ? Health.hp : -1;
         const auto hp_prev = g_last_hp.find(p.object);
         if (hp_prev == g_last_hp.end() || hp_prev->second != hp_now) {
@@ -246,7 +269,7 @@ void visuals::draw() {
         e.hp = Health.hp;
         e.max_hp = Health.max_hp;
         if (cfg::esp::weapon) e.weapon = weapon::active_id(p);
-        if (!read_enemy_pose(e)) continue;
+        if (!apply_pose(e, s_frame[fi].pose)) continue;
         ++positioned;
         e.distance = calculate_distance(e.position, LocalPosition);
         if (e.distance > 500.f) continue;
@@ -261,7 +284,11 @@ void visuals::draw() {
             static long long straddle_log = 0;
             static unsigned straddles = 0;
             ++straddles;
-            for (enemy_frame& e : frame_enemies) read_enemy_pose(e);
+            static std::vector<player::frame_player> s_reread;
+            s_reread.clear();
+            for (const enemy_frame& e : frame_enemies) s_reread.push_back({e.snap, false});
+            player::read_frame(s_reread, s_batch);
+            for (size_t k = 0; k < frame_enemies.size(); ++k) apply_pose(frame_enemies[k], s_reread[k].pose);
             Cameras.front().view = view_after;
             Cameras.front().projection = proj_after;
             if (diag::every(straddle_log, 10000))

@@ -32,6 +32,7 @@
 #include "ImGui/backends/imgui_impl_opengl3.h"
 #include "ImGui/backends/imgui_impl_android.h"
 #include "Android_touch/Touch.hpp"
+#include "other/present_gate.hpp"
 
 using namespace std;
 using namespace std::chrono_literals;
@@ -51,13 +52,17 @@ extern int native_window_screen_x, native_window_screen_y;
 extern unsigned g_swap_failures;             // total eglSwapBuffers failures
 extern unsigned g_swap_consecutive_failures; // failures since the last success
 extern unsigned g_swap_last_error;           // last eglGetError() after a failure
+extern present::gate g_present_gate;         // skips swaps of frames identical to the one on screen
+extern bool g_egl_lean_config;               // RGBA8888 without depth/stencil was available
 
 bool init_egl(uint32_t _screen_x, uint32_t _screen_y, bool log = false);
 bool initGUI_draw(uint32_t _screen_x, uint32_t _screen_y, bool log = false);
 bool ImGui_init();
 void screen_config();
 void drawBegin();
-void drawEnd();
+// Renders and swaps unless the frame equals the one on screen. True when a
+// swap was attempted (it blocked on vsync), false when the frame was skipped.
+bool drawEnd();
 void shutdown();
 
 #endif
