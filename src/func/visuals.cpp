@@ -460,7 +460,8 @@ void visuals::draw() {
         float y1 = std::min(top.y, foot.y), y2 = std::max(top.y, foot.y);
         if (!(y2 - y1 >= 1.f) || y2 - y1 > g_sh * 3.f) continue;
         if (y2 - y1 < 10.f) { const float mid = (y1 + y2) * 0.5f; y1 = mid - 5.f; y2 = mid + 5.f; }
-        const float half_w = std::max(3.f, (y2 - y1) * 0.21f);
+        // Clean box: width = half the height (measured on the reference); others 0.42.
+        const float half_w = std::max(3.f, (y2 - y1) * (cfg::esp::box_type == 2 ? 0.25f : 0.21f));
         const float cx = roundf((top.x + foot.x) * 0.5f);
         const ImVec2 mn(roundf(cx - half_w), roundf(y1)), mx(roundf(cx + half_w), roundf(y2));
         if (mx.x < -64.f || mn.x > g_sw + 64.f || mx.y < -64.f || mn.y > g_sh + 64.f) continue;
@@ -557,6 +558,14 @@ void visuals::dbox(const ImVec2& t, const ImVec2& b, float a) {
     const ImU32 col = rgba(cfg::esp::box_col, a);
     const ImU32 border = black(0.78f * a);
 
+    if (cfg::esp::box_type == 2) {
+        // Clean: one thin translucent line, slightly rounded, no dark outline.
+        // 2 px on a 1224 px tall screen, scaled with the display.
+        const float th = std::max(1.5f, roundf(2.f * g_sh / 1224.f));
+        const ImU32 thin = rgba(cfg::esp::box_col, 0.82f * a);
+        dl->AddRect(ImVec2(x1, y1), ImVec2(x2, y2), thin, th * 1.5f, 0, th);
+        return;
+    }
     if (cfg::esp::box_type == 0) {
         dl->AddRect(ImVec2(x1 - 1.f, y1 - 1.f), ImVec2(x2 + 2.f, y2 + 2.f), border, 0.f, 0, 1.f);
         dl->AddRect(ImVec2(x1 + 1.f, y1 + 1.f), ImVec2(x2, y2), border, 0.f, 0, 1.f);

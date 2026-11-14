@@ -263,8 +263,8 @@ namespace ui::menu {
             }
             text_at(dl, c, 48.f * k, c_text, a, "Box Style");
             c.y += 48.f * k;
-            static const char* const styles[] = {"Full", "Corner"};
-            segmented(dl, styles, 2, &cfg::esp::box_type, c, cw, 58.f * k, a, k, live);
+            static const char* const styles[] = {"Full", "Corner", "Clean"};
+            segmented(dl, styles, 3, &cfg::esp::box_type, c, cw, 58.f * k, a, k, live);
             c.y += 58.f * k + 12.f * k;
             const float color_y = c.y;
             color_row(dl, "Color", &cfg::esp::box_col, c, cw, row, a, k, live);
