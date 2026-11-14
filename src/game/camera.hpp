@@ -49,6 +49,7 @@ namespace cam {
         int pid{-1};
         int mismatch_frames{0};
         long long locked_ms{0};
+        long long fov_mismatch_since_ms{0};  // projection FOV != MainCamera FOV since
     };
     struct projection_info {
         float fov{0.f};
@@ -210,9 +211,23 @@ namespace cam {
         float score{0.f};
     };
 
+    // The world camera and the first-person arms camera sit at the same eye
+    // pose; only the projection tells them apart. Measured on 1.1.0: the
+    // MainCamera bor FOV follows the world camera (60, 20 when scoped) and
+    // the ArmsCamera bor holds the arms camera's constant 40. Pure.
+    //   rejects a projection that has the arms FOV while the main FOV differs,
+    //   otherwise returns a penalty growing with the distance to the main FOV.
+    inline bool projection_fov_ok(float proj_fov, float main_fov, float arms_fov, float& penalty) {
+        penalty = std::fabs(proj_fov - main_fov) * 2.f;
+        const bool arms_known = arms_fov > 1.f && std::fabs(main_fov - arms_fov) > 2.f;
+        if (arms_known && std::fabs(proj_fov - arms_fov) < 1.f && std::fabs(proj_fov - main_fov) > 1.f)
+            return false;
+        return true;
+    }
+
     // Pick the view/projection windows of one native Camera that agree with
     // the bor pose. Returns false when no view window matches.
-    inline bool match_native(uint64_t managed, uint64_t native, const bor_pose& pose, match& out) {
+    inline bool match_native(uint64_t managed, uint64_t native, const bor_pose& pose, float arms_fov, match& out) {
         uint8_t buf[k_camera_block]{};
         const size_t size = read_camera_block(native, buf);
         if (!size) return false;
@@ -241,12 +256,19 @@ namespace cam {
             std::memcpy(&m, buf + off, sizeof(m));
             const projection_info info = projection_params(m);
             if (info.fov < 5.f || info.fov > 150.f) continue;
+            float fov_penalty = 0.f;
+            if (!projection_fov_ok(info.fov, pose.fov, arms_fov, fov_penalty)) continue; // arms camera
             float score = 0.f;
-            if (info.far_plane > 50.f) score += 100.f;           // world camera, not arms/UI
+            if (info.far_plane > 50.f) score += 100.f;           // world camera, not UI
             if (info.near_plane > 0.f && info.near_plane < 1.f) score += 10.f;
             const float screen_aspect = g_sw / std::max(g_sh, 1.f);
             if (std::fabs(info.aspect - screen_aspect) < 0.15f) score += 20.f;
-            score -= std::fabs(info.fov - pose.fov) * 0.2f;      // mild tie-break only: scoped FOV differs legitimately
+            // Strong: the bor FOV tracks the world camera, scope included.
+            // The old 0.2 weight left 4 points between the world camera and
+            // the arms camera (FOV 40), and a lock taken while the two FOVs
+            // diverged (scope animation, round start) kept the arms camera:
+            // boxes too small in scope, too large without it.
+            score -= fov_penalty;
             if (off == int(v100::camera_projection)) score += 5.f;
             if (score > best_proj_score) { best_proj_score = score; best_proj = off; best_info = info; }
         }
@@ -336,6 +358,24 @@ namespace cam {
                 } else {
                     g_lock.mismatch_frames = 0;
                 }
+                // The gameplay camera's FOV follows the MainCamera bor FOV
+                // (60 -> 20 in scope on 1.1.0). A locked projection that
+                // disagrees for 600 ms (longer than a scope animation) is
+                // another camera, e.g. the arms camera with its fixed 40.
+                const float locked_fov = projection_params(candidate.projection).fov;
+                const long long now_ms = diag::now_ms();
+                if (std::fabs(locked_fov - pose.fov) > 3.f) {
+                    if (!g_lock.fov_mismatch_since_ms) g_lock.fov_mismatch_since_ms = now_ms;
+                    else if (now_ms - g_lock.fov_mismatch_since_ms >= 600) {
+                        diag::log("CAMERA", "camera lock dropped: projection FOV %.1f != MainCamera FOV %.1f for %lld ms (not the world camera)",
+                                  locked_fov, pose.fov, now_ms - g_lock.fov_mismatch_since_ms);
+                        g_lock = {};
+                        g_last_probe = 0;
+                        return false;
+                    }
+                } else {
+                    g_lock.fov_mismatch_since_ms = 0;
+                }
                 if (diag::every(g_last_lock_log, 5000)) {
                     const projection_info info = projection_params(candidate.projection);
                     diag::log("CAMERA", "locked native=0x%llx fov=%.1f aspect=%.2f near=%.2f far=%.0f borFov=%.1f borDist=%.2f",
@@ -361,6 +401,8 @@ namespace cam {
         if (!camera_class) return false;
         const scanner::results snap = scanner::snapshot();
         if (snap.pid != proc::pid || snap.lib != proc::lib) return false;
+        const bor_pose arms = read_bor(chain.arms_bor);
+        const float arms_fov = arms.valid ? arms.fov : 0.f;
         const std::vector<uint64_t> managed_list = managed_candidates(snap, chain);
         match best{};
         bool have_best = false;
@@ -372,7 +414,7 @@ namespace cam {
             if (!managed_to_native(managed, camera_class, native)) continue;
             ++probed;
             match m{};
-            if (!match_native(managed, native, pose, m)) {
+            if (!match_native(managed, native, pose, arms_fov, m)) {
                 if (detail && probed <= 24) {
                     // Why did this wrapper not match: dump its first view window pose.
                     uint8_t buf[k_camera_block]{};
@@ -442,7 +484,10 @@ namespace cam {
         if (chain.main_bor && player::synthetic_from_bor(chain.main_bor, camera_kind_main_state, synthetic))
             out.push_back(synthetic);
         const std::vector<camera_candidate> fallback = player::camera_fallback_candidates(local_player);
-        out.insert(out.end(), fallback.begin(), fallback.end());
+        // vqn holds both bors; the ArmsCamera one (fixed FOV 40) projects the
+        // first-person arms, not the world.
+        for (const camera_candidate& c : fallback)
+            if (!(chain.arms_bor && c.kind == camera_kind_vqn_state && c.address == chain.arms_bor)) out.push_back(c);
         return out;
     }
 }
