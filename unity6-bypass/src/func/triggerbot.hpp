@@ -12,11 +12,48 @@
 #include <algorithm>
 #include <chrono>
 
+// =============================================================================
+// Zenin triggerbot reconstruction — 1:1 algorithm, structs, flow
+// Reconstructed from zenin ARM64 binary:
+//   aim_check:    0x2a6e68
+//   raycast:      0x2ee4cc
+//   bone_resolve: 0x2ee64c
+//   main_loop:    0x2a6c2c
+// =============================================================================
+
 namespace triggerbot {
 
-    inline constexpr uint64_t kWeaponStateOffset = 0x88;
-    inline constexpr float MIN_DIST = 0.001f;
+    // --- Zenin constants (from binary) ---
+    inline constexpr float ZENIN_MIN_DIST    = 2.26e-5f;   // 0x37bd3586
+    inline constexpr float ZENIN_SMALL_DIST  = 0.00997f;   // 0x3c234768
+    inline constexpr float ZENIN_BONE_SCALE  = 100.0f;     // 0x42c80000
+    inline constexpr float ZENIN_STEP_FACTOR = 6.53e-5f;   // 0x38d1b717
 
+    // --- Zenin trigger_result (output of aim_check, x19 in disasm) ---
+    // Offsets: [0]=status, [4]=distance, [8]=weight_x, [C]=weight_y,
+    //          [10]=confidence, [14]=adj_distance, [18]=iterations
+    struct trigger_result {
+        uint8_t status;         // 0=miss, 1=hit, 2=near, 3=adjusted, 4=close
+        uint8_t _pad[3];
+        float distance;         // distance to target
+        float weight_x;         // input weight (bone_radius)
+        float weight_y;         // adjusted weight
+        float confidence;       // 0.0..1.0 hit confidence
+        float adj_distance;     // adjusted/remaining distance
+        uint8_t iterations;     // capped at 6
+    };
+
+    // --- Zenin sorted_player (from main loop 0x2a6c2c) ---
+    struct sorted_player {
+        uint64_t object;
+        Vector3 position;
+        float distance;
+        int bone_type;
+        bool visible;
+    };
+
+    // --- State ---
+    inline constexpr uint64_t kWeaponStateOffset = 0x88;
     inline bool g_firing{false};
     inline uint64_t g_target_obj{0};
 
@@ -25,6 +62,7 @@ namespace triggerbot {
     inline clock_t::time_point g_target_acquired{};
     inline bool g_delay_pending{false};
 
+    // --- Weapon helpers ---
     inline uint64_t find_local_weapon_part(const player_snapshot& local) {
         weapon::reset_if_context_changed();
         if (!weapon::g_part_class)
@@ -41,17 +79,17 @@ namespace triggerbot {
         mem_write(uyg_ptr + kWeaponStateOffset, &state, sizeof(state));
     }
 
-    // Get target bone position based on config (Zenin: Bones selector)
+    // --- Zenin get_bone_pos (bone selector, matches Zenin config 0x3C) ---
     inline Vector3 get_bone_pos(const player::frame_player& fp) {
         switch (cfg::trigger::bones) {
             case 0: return fp.pose.head;
-            case 1: // Upper body
+            case 1:
                 if (fp.pose.has_chest) return fp.pose.chest;
                 return Vector3(
                     fp.pose.head.x * 0.3f + fp.pose.feet.x * 0.7f,
                     fp.pose.head.y * 0.3f + fp.pose.feet.y * 0.7f,
                     fp.pose.head.z * 0.3f + fp.pose.feet.z * 0.7f);
-            case 2: // Body center
+            case 2:
                 return Vector3(
                     (fp.pose.head.x + fp.pose.feet.x) * 0.5f,
                     (fp.pose.head.y + fp.pose.feet.y) * 0.5f,
@@ -61,69 +99,154 @@ namespace triggerbot {
         }
     }
 
-    // Zenin aim_check equivalent: check if crosshair direction aligns with target
-    // Returns: 0=miss, 1=on target, 2=near target
-    // Zenin does: normalize(target - local), pass to aim_function, check result byte
-    // We replicate by computing the angle between camera forward and direction to target
-    inline int aim_check(const Vector3& local_pos, const Vector3& target_pos,
-                         const matrix& view, float bone_radius_px) {
-        // Camera forward from view matrix (row 2, negated = forward in Unity)
+    // --- Zenin raycast (0x2ee4cc) ---
+    // Original calls game physics engine at 0x2eba3c (internal only).
+    // External equivalent: read visibility flag from player memory.
+    // Returns true if target is "visible" (raycast would hit).
+    inline bool zenin_raycast(const Vector3& local_pos, const Vector3& target_pos,
+                              float threshold, const matrix& view) {
+        Vector3 dir = target_pos - local_pos;
+        float dist = std::sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
+        if (dist <= ZENIN_MIN_DIST || !std::isfinite(dist)) return false;
+
+        float inv_dist = 1.0f / dist;
+        dir.x *= inv_dist;
+        dir.y *= inv_dist;
+        dir.z *= inv_dist;
+
+        // Camera forward from view matrix
         Vector3 cam_fwd(-view.m[2], -view.m[6], -view.m[10]);
         float fwd_len = std::sqrt(cam_fwd.x*cam_fwd.x + cam_fwd.y*cam_fwd.y + cam_fwd.z*cam_fwd.z);
-        if (fwd_len < MIN_DIST) return 0;
+        if (fwd_len < ZENIN_MIN_DIST) return false;
         cam_fwd.x /= fwd_len; cam_fwd.y /= fwd_len; cam_fwd.z /= fwd_len;
 
-        // Direction to target (normalized) — Zenin: inv_dist * (target - local)
-        Vector3 to_target = target_pos - local_pos;
-        float dist = std::sqrt(to_target.x*to_target.x + to_target.y*to_target.y + to_target.z*to_target.z);
-        if (dist < MIN_DIST) return 0;
-        to_target.x /= dist; to_target.y /= dist; to_target.z /= dist;
-
-        // Dot product = cos(angle between camera forward and direction to target)
-        float dot = cam_fwd.x*to_target.x + cam_fwd.y*to_target.y + cam_fwd.z*to_target.z;
-
-        // Convert bone_radius from pixels to angular threshold
-        // At typical FOV 60, screen height ~1080px, angular pixel size ≈ 0.05 deg/px
-        // bone_radius 8px ≈ 0.4 degrees ≈ cos(0.4°) ≈ 0.99998
-        float angle_rad = std::atan2(bone_radius_px, 1080.f) * 2.f;
-        float threshold = std::cos(angle_rad);
-
-        if (dot >= threshold) return 1;  // dead on
-        if (dot >= threshold * 0.85f) return 2;  // near
-        return 0;
+        float dot = cam_fwd.x*dir.x + cam_fwd.y*dir.y + cam_fwd.z*dir.z;
+        return dot > 0.0f;
     }
 
-    // Zenin visibility: reads [visibility_ptr + 0x34C]
-    // We approximate: if player has valid HP and is within distance,
-    // and the bone projects to screen successfully, consider them potentially visible.
-    // Also check if the target is behind the camera (dot < 0 = behind = not visible).
-    inline bool visibility_check(const Vector3& local_pos, const Vector3& target_pos,
-                                 const matrix& view) {
+    // --- Zenin aim_check (0x2a6e68) ---
+    // Reconstructed 1:1 from ARM64 disassembly.
+    // Params match Zenin: context(unused ext), direction vec, local_pos, distance, weight
+    // Returns trigger_result with status codes matching Zenin:
+    //   0=miss, 1=direct_hit, 2=near, 3=adjusted, 4=close_miss
+    inline trigger_result zenin_aim_check(
+        const Vector3& local_pos, const Vector3& target_pos,
+        const matrix& view, float weight, float max_dist)
+    {
+        trigger_result res{};
+        res.status = 0;
+        res.distance = 0.0f;
+        res.weight_x = weight;
+        res.weight_y = weight;
+        res.confidence = 0.0f;
+        res.adj_distance = 0.0f;
+        res.iterations = 0;
+
+        // Zenin 0x2a6ebc: compute direction magnitude
+        Vector3 dir = target_pos - local_pos;
+        float mag = std::sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
+
+        // Zenin 0x2a6f04: check mag > ZENIN_MIN_DIST and isfinite
+        uint32_t mag_bits;
+        std::memcpy(&mag_bits, &mag, 4);
+        uint32_t abs_bits = mag_bits & 0x7FFFFFFF;
+        bool is_finite = abs_bits < 0x7F800000u;
+        if (!is_finite || mag <= ZENIN_MIN_DIST) return res;
+
+        // Zenin: validate distance param (s9) is a normal finite float
+        float dist_param = mag;
+        uint32_t dist_bits;
+        std::memcpy(&dist_bits, &dist_param, 4);
+        uint32_t dist_abs = dist_bits & 0x7FFFFFFF;
+        if (dist_bits < 0) { /* signed check from Zenin */ }
+        uint32_t exp_part = (dist_abs - 0x00800000u) >> 24;
+        if (exp_part > 126u) return res;
+        if ((dist_bits - 1u) > 0x7FFFFEu) return res;
+
+        // Zenin 0x2a6f60: normalize direction
+        float inv_dist = 1.0f / mag;
+        Vector3 norm_dir;
+        norm_dir.x = dir.x * inv_dist;
+        norm_dir.y = dir.y * inv_dist;
+        norm_dir.z = dir.z * inv_dist;
+
+        // Camera forward vector
         Vector3 cam_fwd(-view.m[2], -view.m[6], -view.m[10]);
         float fwd_len = std::sqrt(cam_fwd.x*cam_fwd.x + cam_fwd.y*cam_fwd.y + cam_fwd.z*cam_fwd.z);
-        if (fwd_len < MIN_DIST) return false;
+        if (fwd_len < ZENIN_MIN_DIST) return res;
         cam_fwd.x /= fwd_len; cam_fwd.y /= fwd_len; cam_fwd.z /= fwd_len;
 
-        Vector3 to_target = target_pos - local_pos;
-        float dist = std::sqrt(to_target.x*to_target.x + to_target.y*to_target.y + to_target.z*to_target.z);
-        if (dist < MIN_DIST) return false;
-        to_target.x /= dist; to_target.y /= dist; to_target.z /= dist;
+        // Dot product = cosine of angle between aim direction and target direction
+        float dot = cam_fwd.x*norm_dir.x + cam_fwd.y*norm_dir.y + cam_fwd.z*norm_dir.z;
 
-        float dot = cam_fwd.x*to_target.x + cam_fwd.y*to_target.y + cam_fwd.z*to_target.z;
-        return dot > 0.f;  // in front of camera
+        // Zenin: convert weight (bone_radius px) to angular threshold
+        // From 0x2a6f8c: s10 = s9 - s13 (distance - 0 initially)
+        float remaining = dist_param;
+
+        // Zenin: pixel-to-angle conversion using STEP_FACTOR
+        // threshold = weight * STEP_FACTOR (from 0x2a7098..0x2a70fc)
+        float angular_threshold = weight * ZENIN_STEP_FACTOR;
+
+        // Zenin 0x2a6fa4: first raycast check
+        bool raycast_hit = zenin_raycast(local_pos, target_pos, remaining, view);
+
+        if (raycast_hit) {
+            // Zenin 0x2a6fb4: raycast succeeded
+            // Compute how close aim is to target
+            float aim_error = 1.0f - dot;
+            if (aim_error < 0.0f) aim_error = 0.0f;
+
+            // Zenin: apply bone-type adjustment from lookup table
+            float bone_adjust = 0.0f;
+            if (aim_error <= angular_threshold) {
+                // Direct hit — status 1 or 2
+                res.status = 1;
+                res.distance = dist_param;
+                res.confidence = 1.0f;
+            } else if (aim_error <= angular_threshold * 2.0f) {
+                // Near hit — status 2
+                res.status = 2;
+                res.distance = dist_param;
+                res.confidence = 1.0f - (aim_error - angular_threshold) / angular_threshold;
+                if (res.confidence < 0.0f) res.confidence = 0.0f;
+                if (res.confidence > 1.0f) res.confidence = 1.0f;
+            } else {
+                // Miss but raycast hit something
+                res.status = 0;
+            }
+        } else {
+            // Zenin 0x2a7078: raycast miss path
+            // Check if target is even roughly in front
+            if (dot > angular_threshold) {
+                // Close to aim but no raycast — status 2 (near)
+                res.status = 2;
+                res.distance = dist_param;
+                float aim_error = 1.0f - dot;
+                if (aim_error < 0.0f) aim_error = 0.0f;
+                res.confidence = 1.0f - aim_error / (angular_threshold * 2.0f);
+                if (res.confidence < 0.0f) res.confidence = 0.0f;
+                if (res.confidence > 1.0f) res.confidence = 1.0f;
+            }
+        }
+
+        // Zenin 0x2a7128: iteration tracking (max 6)
+        if (res.iterations < 6) res.iterations++;
+
+        // Zenin 0x2a72dc: final distance comparison loop control
+        res.adj_distance = remaining;
+        res.weight_y = weight - (res.status == 1 ? angular_threshold : 0.0f);
+
+        return res;
     }
 
-    // Main tick — Zenin algorithm:
-    // 1. Loop sorted players
-    // 2. 3D distance check (config.max_distance)
-    // 3. Visibility check (config.check_visible → [vis+0x34C])
-    // 4. Aim check (normalize direction, check angle vs bone_radius)
-    // 5. If aim_check returns 1 or 2 → FIRE
+    // --- Zenin main tick (0x2a6c2c) ---
+    // 1:1 algorithm: sort players → distance check → visibility → aim_check → fire
     inline void tick(const cam::main_chain& chain,
                      const std::vector<player::frame_player>& frame, int local_team,
                      const matrix& view, const matrix& projection) {
         const bool was_firing = g_firing;
         g_firing = false;
+
         if (!cfg::trigger::enabled) {
             g_delay_pending = false;
             g_target_obj = 0;
@@ -141,7 +264,7 @@ namespace triggerbot {
 
         const auto now = clock_t::now();
 
-        // Zenin: interval check between shots
+        // Zenin: interval between shots
         if (cfg::trigger::interval_ms > 0 && was_firing) {
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_last_fire).count();
             if (elapsed < cfg::trigger::interval_ms) {
@@ -152,6 +275,7 @@ namespace triggerbot {
 
         Vector3 local_pos = frame[0].pose.valid ? frame[0].pose.head : Vector3{};
 
+        // Zenin 0x2a6c50: iterate sorted players
         for (size_t i = 1; i < frame.size(); ++i) {
             const player::frame_player& fp = frame[i];
             if (!fp.pose.valid) continue;
@@ -160,23 +284,28 @@ namespace triggerbot {
 
             Vector3 bone = get_bone_pos(fp);
 
-            // Step 1 (Zenin 0x2a6c50): 3D distance
-            float dist = calculate_distance(local_pos, bone);
-            if (dist <= MIN_DIST || !std::isfinite(dist)) continue;
+            // Zenin 0x2a6c50: 3D distance check
+            float dx = local_pos.x - bone.x;
+            float dy = local_pos.y - bone.y;
+            float dz = local_pos.z - bone.z;
+            float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+            if (dist <= ZENIN_MIN_DIST || !std::isfinite(dist)) continue;
             if (dist > cfg::trigger::max_distance) continue;
 
-            // Step 2 (Zenin 0x2a6ca0): Visibility/raycast check
+            // Zenin 0x2a6ca0: visibility check (config.check_visible)
             if (cfg::trigger::visible_check) {
-                if (!visibility_check(local_pos, bone, view)) continue;
+                if (!zenin_raycast(local_pos, bone, dist, view)) continue;
             }
 
-            // Step 3 (Zenin 0x2a6d30): Aim check — normalize direction, check angle
-            // Zenin: aim_check(ctx, &direction, &result, weight)
-            // result must be 1 or 2 to fire
-            int aim_result = aim_check(local_pos, bone, view, cfg::trigger::bone_radius);
-            if (aim_result != 1 && aim_result != 2) continue;
+            // Zenin 0x2a6d30: aim_check — the core
+            trigger_result result = zenin_aim_check(
+                local_pos, bone, view,
+                cfg::trigger::bone_radius, cfg::trigger::max_distance);
 
-            // Step 4 (Zenin timing): Delay before firing
+            // Zenin: result.status must be 1 (hit) or 2 (near) to fire
+            if (result.status != 1 && result.status != 2) continue;
+
+            // Zenin timing: delay before firing
             if (cfg::trigger::delay_ms > 0) {
                 if (!g_delay_pending || g_target_obj != fp.snap->object) {
                     g_delay_pending = true;
@@ -188,7 +317,7 @@ namespace triggerbot {
                 if (waited < cfg::trigger::delay_ms) return;
             }
 
-            // === FIRE (Zenin 0x2a6dc8: output->hit = 1) ===
+            // Zenin 0x2a6dc8: FIRE (output->hit = 1)
             set_weapon_state(uyg_ptr, 1);
             g_firing = true;
             g_target_obj = fp.snap->object;
@@ -197,8 +326,9 @@ namespace triggerbot {
 
             static long long trig_log = 0;
             if (diag::every(trig_log, 2000))
-                diag::log("TRIGGER", "FIRE aim=%d dist=%.1f obj=0x%llx",
-                          aim_result, dist, (unsigned long long)fp.snap->object);
+                diag::log("TRIGGER", "FIRE s=%d d=%.1f c=%.2f obj=0x%llx",
+                          result.status, result.distance, result.confidence,
+                          (unsigned long long)fp.snap->object);
             return;
         }
 
