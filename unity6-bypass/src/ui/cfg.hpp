@@ -32,14 +32,12 @@ namespace esp {
     inline ImVec4 health_col = ImVec4(240/255.f, 64/255.f, 90/255.f, 1.f);
 }
 
-namespace aim {
+namespace trigger {
     inline bool enabled = false;
-    inline bool shooting_check = false;
-    inline bool visible_check = false;
-    inline bool draw_fov = true;
-    inline int bone = 0;       // 0 Head, 1 Chest, 2 Legs
-    inline float fov = 30.f;   // degrees
-    inline float smooth = 2.f; // 1 = instant snap, higher = slower
+    inline int bone = 0;              // 0 Head, 1 Chest, 2 Legs
+    inline float hitbox_scale = 1.0f; // screen hitbox multiplier
+    inline bool draw_indicator = true;
+    inline bool target_lock = true;   // lock onto first target until crosshair leaves
 }
 
 }

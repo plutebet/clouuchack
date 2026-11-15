@@ -6,7 +6,7 @@
 // ================================================================================
 
 #include "visuals.hpp"
-#include "aimbot.hpp"
+#include "triggerbot.hpp"
 #include "../game/game.hpp"
 #include "../game/math.hpp"
 #include "../game/player.hpp"
@@ -447,15 +447,12 @@ void visuals::draw() {
     g_camera = selected_camera;
     selected_kind_prev = selected_kind;
 
-    // ---- aimbot tick (runs before ESP draw) ----
-    if (cfg::aim::enabled && !Cameras.empty() && chain.main_bor) {
-        crash::stage("aimbot");
-        aimbot::tick(chain, LocalPosition, s_frame, LocalTeam, ViewMatrix, ProjectionMatrix);
+    // ---- triggerbot tick (runs before ESP draw) ----
+    if (cfg::trigger::enabled && !Cameras.empty() && chain.main_bor) {
+        crash::stage("triggerbot");
+        triggerbot::tick(chain, s_frame, LocalTeam, ViewMatrix, ProjectionMatrix);
     }
-    {
-        const cam::projection_info pi = cam::projection_params(ProjectionMatrix);
-        aimbot::draw_fov_circle(pi.fov);
-    }
+    triggerbot::draw_indicator();
 
     crash::stage("esp-draw");
     // Box from the feet to just above the head: the head point is the eye

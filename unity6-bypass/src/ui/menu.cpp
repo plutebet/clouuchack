@@ -284,26 +284,22 @@ namespace ui::menu {
             return false;
         }
 
-        void aimbot_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
+        void triggerbot_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
             const float pad = k_pad * k, row = k_row * k;
             const float cw = amax.x - amin.x - pad * 2.f;
             ImVec2 c(amin.x + pad, amin.y + pad * 0.5f);
-            toggle_row(dl, "Aimbot", &cfg::aim::enabled, c, cw, row, a, k, live);
+            toggle_row(dl, "Triggerbot", &cfg::trigger::enabled, c, cw, row, a, k, live);
             c.y += row;
-            toggle_row(dl, "Visible Check", &cfg::aim::visible_check, c, cw, row, a, k, live);
+            toggle_row(dl, "Indicator", &cfg::trigger::draw_indicator, c, cw, row, a, k, live);
             c.y += row;
-            toggle_row(dl, "Shooting Check", &cfg::aim::shooting_check, c, cw, row, a, k, live);
+            toggle_row(dl, "Target Lock", &cfg::trigger::target_lock, c, cw, row, a, k, live);
             c.y += row;
-            toggle_row(dl, "Draw FOV", &cfg::aim::draw_fov, c, cw, row, a, k, live);
-            c.y += row;
-            text_at(dl, c, 48.f * k, c_text, a, "Aimbot Bone");
+            text_at(dl, c, 48.f * k, c_text, a, "Bone");
             c.y += 48.f * k;
             static const char* const bones[] = {"Head", "Chest", "Legs"};
-            segmented(dl, bones, 3, &cfg::aim::bone, c, cw, 58.f * k, a, k, live);
+            segmented(dl, bones, 3, &cfg::trigger::bone, c, cw, 58.f * k, a, k, live);
             c.y += 58.f * k + 16.f * k;
-            slider_row(dl, "Aimbot FOV", &cfg::aim::fov, 5.f, 90.f, c, cw, row, a, k, live);
-            c.y += row;
-            slider_row(dl, "Smooth", &cfg::aim::smooth, 1.f, 30.f, c, cw, row, a, k, live);
+            slider_row(dl, "Hitbox Scale", &cfg::trigger::hitbox_scale, 0.5f, 3.0f, c, cw, row, a, k, live);
         }
 
         void visuals_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
@@ -443,7 +439,7 @@ namespace ui::menu {
         // ---- content ----
         const ImVec2 amin(p.x + sbw, p.y), amax(pmax.x, pmax.y);
         dl->PushClipRect(amin, amax, true);
-        if (g_tab == 0) aimbot_tab(dl, amin, amax, a, k, live);
+        if (g_tab == 0) triggerbot_tab(dl, amin, amax, a, k, live);
         else             visuals_tab(dl, amin, amax, a, k, live);
         dl->PopClipRect();
 
