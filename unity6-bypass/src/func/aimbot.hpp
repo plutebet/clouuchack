@@ -71,7 +71,6 @@ namespace aimbot {
 
     inline target_info g_target{};
     inline long long g_last_write = 0;
-    inline long long g_last_tick_ms = 0;
 
     inline void tick(const cam::main_chain& chain, const Vector3& local_pos,
                      const std::vector<player::frame_player>& frame, int local_team,
@@ -123,13 +122,9 @@ namespace aimbot {
         g_target = best;
 
         const long long now = diag::now_ms();
-        float dt = (g_last_tick_ms > 0) ? float(now - g_last_tick_ms) * 0.001f : 0.016f;
-        dt = std::clamp(dt, 0.001f, 0.05f);
-        g_last_tick_ms = now;
 
         const float smooth_factor = std::clamp(cfg::aim::smooth, 1.f, 30.f);
-        const float speed = 12.f / smooth_factor;
-        const float t = std::clamp(speed * dt, 0.005f, 1.f);
+        const float t = 1.f / smooth_factor;
 
         float dp = shortest_delta(cur_euler.x, best.desired_angles.x);
         float dy = shortest_delta(cur_euler.y, best.desired_angles.y);
@@ -144,10 +139,10 @@ namespace aimbot {
 
         static long long aim_log = 0;
         if (diag::every(aim_log, 3000))
-            diag::log("AIMBOT", "tgt=0x%llx bone=%d dist=%.1f cur=(%.1f %.1f) dst=(%.1f %.1f) out=(%.1f %.1f) sm=%.1f dt=%.3f",
+            diag::log("AIMBOT", "tgt=0x%llx bone=%d dist=%.1f cur=(%.1f %.1f) dst=(%.1f %.1f) out=(%.1f %.1f) t=%.2f dp=%.1f dy=%.1f",
                       (unsigned long long)best.object, cfg::aim::bone, best.screen_dist,
                       cur_euler.x, cur_euler.y, best.desired_angles.x, best.desired_angles.y,
-                      new_euler.x, new_euler.y, smooth_factor, dt);
+                      new_euler.x, new_euler.y, t, dp, dy);
 
         g_last_write = now;
     }
