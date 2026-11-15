@@ -39,4 +39,5 @@ jobs:
         cp unity6-bypass/libs/arm64-v8a/eeeww build-output/eeeww
         git add build-output/eeeww
         git commit -m "build: add compiled eeeww ARM64 binary [skip ci]"
+        git pull --rebase || true
         git push
