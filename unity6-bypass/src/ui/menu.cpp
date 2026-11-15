@@ -290,6 +290,8 @@ namespace ui::menu {
             ImVec2 c(amin.x + pad, amin.y + pad * 0.5f);
             toggle_row(dl, "Aimbot", &cfg::aim::enabled, c, cw, row, a, k, live);
             c.y += row;
+            toggle_row(dl, "Visible Check", &cfg::aim::visible_check, c, cw, row, a, k, live);
+            c.y += row;
             toggle_row(dl, "Shooting Check", &cfg::aim::shooting_check, c, cw, row, a, k, live);
             c.y += row;
             toggle_row(dl, "Draw FOV", &cfg::aim::draw_fov, c, cw, row, a, k, live);

@@ -24,8 +24,9 @@ namespace aimbot {
     }
 
     inline float normalize_angle(float a) {
-        while (a > 180.f) a -= 360.f;
-        while (a < -180.f) a += 360.f;
+        a = std::fmod(a, 360.f);
+        if (a > 180.f)  a -= 360.f;
+        if (a < -180.f) a += 360.f;
         return a;
     }
 
@@ -55,9 +56,11 @@ namespace aimbot {
 
     inline target_info g_target{};
     inline long long g_last_write = 0;
+    inline long long g_last_tick_ms = 0;
 
     inline void tick(const cam::main_chain& chain, const Vector3& local_pos,
-                     const std::vector<player::frame_player>& frame, int local_team) {
+                     const std::vector<player::frame_player>& frame, int local_team,
+                     const matrix& view, const matrix& projection) {
         g_target = {};
         if (!cfg::aim::enabled) return;
         if (!chain.main_bor) return;
@@ -78,9 +81,17 @@ namespace aimbot {
         for (size_t i = 1; i < frame.size(); ++i) {
             const player::frame_player& fp = frame[i];
             if (!fp.pose.valid) continue;
+            if (fp.snap->team == local_team) continue;
             if (fp.want_health && !(fp.health.valid && fp.health.hp > 0)) continue;
 
             const Vector3 bone = bone_position(fp.pose.feet, fp.pose.head, cfg::aim::bone);
+
+            if (cfg::aim::visible_check) {
+                ImVec2 scr;
+                if (!world_to_screen(bone, view, projection, scr)) continue;
+                if (scr.x < 0.f || scr.x > g_sw || scr.y < 0.f || scr.y > g_sh) continue;
+            }
+
             const Vector3 desired = angle_to(cam_pos, bone);
             const float dist = angle_distance_screen(cur_euler, desired);
 
@@ -96,34 +107,44 @@ namespace aimbot {
         if (!best.valid || best.screen_dist > cfg::aim::fov) return;
         g_target = best;
 
+        const long long now = diag::now_ms();
+        float dt = (g_last_tick_ms > 0) ? float(now - g_last_tick_ms) * 0.001f : 0.016f;
+        dt = std::clamp(dt, 0.001f, 0.1f);
+        g_last_tick_ms = now;
+
         const float smooth_factor = std::clamp(cfg::aim::smooth, 1.f, 30.f);
-        const float t = 1.f / smooth_factor;
+        const float speed = 15.f / smooth_factor;
+        const float t = std::clamp(speed * dt, 0.01f, 1.f);
 
         Vector3 new_euler;
         new_euler.x = cur_euler.x + normalize_angle(best.desired_angles.x - cur_euler.x) * t;
         new_euler.y = cur_euler.y + normalize_angle(best.desired_angles.y - cur_euler.y) * t;
         new_euler.z = 0.f;
 
-        const long long now = diag::now_ms();
+        new_euler.x = normalize_angle(new_euler.x);
+        new_euler.y = normalize_angle(new_euler.y);
+
         mem_write(chain.main_bor + v100::bor_transform + sizeof(Vector3),
                   &new_euler, sizeof(Vector3));
 
         static long long aim_log = 0;
         if (diag::every(aim_log, 3000))
-            diag::log("AIMBOT", "target=0x%llx bone=%d dist=%.1f euler=(%.1f %.1f) -> (%.1f %.1f) smooth=%.1f",
+            diag::log("AIMBOT", "target=0x%llx bone=%d dist=%.1f euler=(%.1f %.1f) -> (%.1f %.1f) smooth=%.1f dt=%.3f vis=%d",
                       (unsigned long long)best.object, cfg::aim::bone, best.screen_dist,
-                      cur_euler.x, cur_euler.y, new_euler.x, new_euler.y, smooth_factor);
+                      cur_euler.x, cur_euler.y, new_euler.x, new_euler.y, smooth_factor, dt,
+                      cfg::aim::visible_check ? 1 : 0);
 
         g_last_write = now;
     }
 
-    inline void draw_fov_circle() {
+    inline void draw_fov_circle(float camera_fov) {
         if (!cfg::aim::enabled || !cfg::aim::draw_fov) return;
         ImDrawList* dl = ImGui::GetBackgroundDrawList();
         const float cx = g_sw * 0.5f;
         const float cy = g_sh * 0.5f;
         const float screen_h = g_sh;
-        const float radius = (cfg::aim::fov / 60.f) * (screen_h * 0.5f);
+        const float actual_fov = (camera_fov > 1.f) ? camera_fov : 60.f;
+        const float radius = (cfg::aim::fov / actual_fov) * (screen_h * 0.5f);
         dl->AddCircle(ImVec2(cx, cy), radius,
                       IM_COL32(255, 255, 255, 80), 64, 1.5f);
     }

@@ -450,9 +450,12 @@ void visuals::draw() {
     // ---- aimbot tick (runs before ESP draw) ----
     if (cfg::aim::enabled && !Cameras.empty() && chain.main_bor) {
         crash::stage("aimbot");
-        aimbot::tick(chain, LocalPosition, s_frame, LocalTeam);
+        aimbot::tick(chain, LocalPosition, s_frame, LocalTeam, ViewMatrix, ProjectionMatrix);
     }
-    aimbot::draw_fov_circle();
+    {
+        const cam::projection_info pi = cam::projection_params(ProjectionMatrix);
+        aimbot::draw_fov_circle(pi.fov);
+    }
 
     crash::stage("esp-draw");
     // Box from the feet to just above the head: the head point is the eye
