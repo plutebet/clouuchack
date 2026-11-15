@@ -290,6 +290,11 @@ namespace ui::menu {
             ImVec2 c(amin.x + pad, amin.y + pad * 0.5f);
             toggle_row(dl, "Triggerbot", &cfg::trigger::enabled, c, cw, row, a, k, live);
             c.y += row;
+            text_at(dl, c, 48.f * k, c_text, a, "Mode");
+            c.y += 48.f * k;
+            static const char* const modes[] = {"Screen", "3D Dist"};
+            segmented(dl, modes, 2, &cfg::trigger::mode, c, cw, 58.f * k, a, k, live);
+            c.y += 58.f * k + 16.f * k;
             toggle_row(dl, "Indicator", &cfg::trigger::draw_indicator, c, cw, row, a, k, live);
             c.y += row;
             toggle_row(dl, "Target Lock", &cfg::trigger::target_lock, c, cw, row, a, k, live);
@@ -299,7 +304,13 @@ namespace ui::menu {
             static const char* const bones[] = {"Head", "Chest", "Legs"};
             segmented(dl, bones, 3, &cfg::trigger::bone, c, cw, 58.f * k, a, k, live);
             c.y += 58.f * k + 16.f * k;
-            slider_row(dl, "Hitbox Scale", &cfg::trigger::hitbox_scale, 0.5f, 3.0f, c, cw, row, a, k, live);
+            if (cfg::trigger::mode == 0) {
+                slider_row(dl, "Hitbox Scale", &cfg::trigger::hitbox_scale, 0.5f, 3.0f, c, cw, row, a, k, live);
+            } else {
+                slider_row(dl, "Max Distance", &cfg::trigger::max_distance, 5.f, 100.f, c, cw, row, a, k, live);
+                c.y += row;
+                toggle_row(dl, "Visibility Check", &cfg::trigger::check_visible, c, cw, row, a, k, live);
+            }
         }
 
         void visuals_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
