@@ -7,6 +7,7 @@
 // ================================================================================
 
 #include "Android_draw/draw.h"
+#include "other/stealth.hpp"
 #include "fonts/menu/pixeloperator.h"
 #include "fonts/esp/esp.h"
 #include "fonts/esp/weapon_icons.h"
@@ -55,7 +56,7 @@ bool initGUI_draw(uint32_t _screen_x, uint32_t _screen_y, bool log) {
 
 bool init_egl(uint32_t _screen_x, uint32_t _screen_y, bool log) {
     if (_screen_x < 2 || _screen_y < 2) return false;
-    ::native_window = android::ANativeWindowCreator::Create("Overlay", _screen_x, _screen_y, false);
+    ::native_window = android::ANativeWindowCreator::Create(stealth::get_stealth_surface_name(), _screen_x, _screen_y, false);
     if (!::native_window) {
         display = EGL_NO_DISPLAY;
         return false;

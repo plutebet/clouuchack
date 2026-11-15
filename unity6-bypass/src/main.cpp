@@ -254,6 +254,7 @@ static int run_overlay(const options& opts) {
     if (!opts.no_launch && get_pid() <= 0) launch_standoff();
 
     game::init();
+    stealth::post_game_check(proc::pid);
     scanner::start();
 
     static float alpha = 0.f;
