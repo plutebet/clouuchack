@@ -286,49 +286,59 @@ namespace ui::menu {
 
         void triggerbot_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
             const float pad = k_pad * k, row = k_row * k;
-            const float half_w = (amax.x - amin.x - pad * 3.f) * 0.5f;
+            const float cw = amax.x - amin.x - pad * 2.f;
             const float srow = row * 0.85f;
+            const float hdr = 36.f * k;
+            const float seg_h = 48.f * k;
+            const float gap = 10.f * k;
 
-            // Left column
             ImVec2 c(amin.x + pad, amin.y + pad * 0.5f);
-            toggle_row(dl, "Enable", &cfg::trigger::enabled, c, half_w, srow, a, k, live);
-            c.y += srow;
-            text_at(dl, c, 36.f * k, c_text, a, "Bones");
-            c.y += 36.f * k;
+
+            toggle_row(dl, "Enable", &cfg::trigger::enabled, c, cw, srow, a, k, live);
+            c.y += srow + gap;
+
+            // --- Bones ---
+            text_at(dl, c, hdr, c_text_dim, a, "Bones");
+            c.y += hdr;
             static const char* const bones[] = {"Head", "Upper", "Body", "Lower"};
-            segmented(dl, bones, 4, &cfg::trigger::bones, c, half_w, 48.f * k, a, k, live);
-            c.y += 48.f * k + 8.f * k;
-            slider_row(dl, "Bone Radius", &cfg::trigger::bone_radius, 1.f, 30.f, c, half_w, srow, a, k, live);
-            c.y += srow + 8.f * k;
-            text_at(dl, c, 32.f * k, c_text_dim, a, "Timing");
-            c.y += 32.f * k;
+            segmented(dl, bones, 4, &cfg::trigger::bones, c, cw, seg_h, a, k, live);
+            c.y += seg_h + gap;
+
+            slider_row(dl, "Bone Radius", &cfg::trigger::bone_radius, 1.f, 30.f, c, cw, srow, a, k, live);
+            c.y += srow + gap * 1.5f;
+
+            // --- Timing ---
+            text_at(dl, c, hdr, c_text_dim, a, "Timing");
+            c.y += hdr;
             {
                 float delay_f = (float)cfg::trigger::delay_ms;
-                slider_row(dl, "Delay", &delay_f, 0.f, 500.f, c, half_w, srow, a, k, live);
+                slider_row(dl, "Delay", &delay_f, 0.f, 500.f, c, cw, srow, a, k, live);
                 cfg::trigger::delay_ms = (int)delay_f;
             }
             c.y += srow;
             {
                 float interval_f = (float)cfg::trigger::interval_ms;
-                slider_row(dl, "Interval", &interval_f, 0.f, 500.f, c, half_w, srow, a, k, live);
+                slider_row(dl, "Interval", &interval_f, 0.f, 500.f, c, cw, srow, a, k, live);
                 cfg::trigger::interval_ms = (int)interval_f;
             }
+            c.y += srow + gap * 1.5f;
 
-            // Right column
-            ImVec2 r(amin.x + pad + half_w + pad, amin.y + pad * 0.5f);
-            text_at(dl, r, 32.f * k, c_text_dim, a, "Limits");
-            r.y += 32.f * k;
-            slider_row(dl, "Distance", &cfg::trigger::max_distance, 5.f, 100.f, r, half_w, srow, a, k, live);
-            r.y += srow + 8.f * k;
-            text_at(dl, r, 32.f * k, c_text_dim, a, "Checks");
-            r.y += 32.f * k;
-            toggle_row(dl, "Visible Check", &cfg::trigger::visible_check, r, half_w, srow, a, k, live);
-            r.y += srow;
-            toggle_row(dl, "Scoped Only", &cfg::trigger::scoped_only, r, half_w, srow, a, k, live);
-            r.y += srow;
-            toggle_row(dl, "Auto Wall", &cfg::trigger::auto_wall, r, half_w, srow, a, k, live);
-            r.y += srow;
-            toggle_row(dl, "Spread Pred.", &cfg::trigger::spread_prediction, r, half_w, srow, a, k, live);
+            // --- Limits ---
+            text_at(dl, c, hdr, c_text_dim, a, "Limits");
+            c.y += hdr;
+            slider_row(dl, "Distance", &cfg::trigger::max_distance, 5.f, 100.f, c, cw, srow, a, k, live);
+            c.y += srow + gap * 1.5f;
+
+            // --- Checks ---
+            text_at(dl, c, hdr, c_text_dim, a, "Checks");
+            c.y += hdr;
+            toggle_row(dl, "Visible Check", &cfg::trigger::visible_check, c, cw, srow, a, k, live);
+            c.y += srow;
+            toggle_row(dl, "Scoped Only", &cfg::trigger::scoped_only, c, cw, srow, a, k, live);
+            c.y += srow;
+            toggle_row(dl, "Auto Wall", &cfg::trigger::auto_wall, c, cw, srow, a, k, live);
+            c.y += srow;
+            toggle_row(dl, "Spread Pred.", &cfg::trigger::spread_prediction, c, cw, srow, a, k, live);
         }
 
         void visuals_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
