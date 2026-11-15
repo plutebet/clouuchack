@@ -15,18 +15,28 @@ namespace aimbot {
     inline Vector3 bone_position(const Vector3& feet, const Vector3& head, int bone) {
         switch (bone) {
             case 0: return head;
-            case 1: return head - Vector3(0.f, 0.12f, 0.f);
-            default: {
-                const float mid_y = (feet.y + head.y) * 0.5f + 0.1f;
-                return Vector3(head.x, mid_y, head.z);
+            case 1: {
+                float t = 0.25f;
+                return Vector3(head.x, head.y - (head.y - feet.y) * t, head.z);
             }
+            case 2: {
+                float t = 0.70f;
+                return Vector3(head.x, head.y - (head.y - feet.y) * t, head.z);
+            }
+            default: return head;
         }
     }
 
-    inline float normalize_angle(float a) {
+    inline float shortest_delta(float from, float to) {
+        float d = std::fmod(to - from, 360.f);
+        if (d > 180.f)  d -= 360.f;
+        if (d < -180.f) d += 360.f;
+        return d;
+    }
+
+    inline float wrap_360(float a) {
         a = std::fmod(a, 360.f);
-        if (a > 180.f)  a -= 360.f;
-        if (a < -180.f) a += 360.f;
+        if (a < 0.f) a += 360.f;
         return a;
     }
 
@@ -37,12 +47,17 @@ namespace aimbot {
         const float dist_xz = std::sqrt(dx * dx + dz * dz);
         float pitch = -std::atan2(dy, dist_xz) * (180.f / 3.14159265f);
         float yaw = std::atan2(dx, dz) * (180.f / 3.14159265f);
-        return Vector3(pitch, yaw, 0.f);
+        return Vector3(wrap_360(pitch), wrap_360(yaw), 0.f);
     }
 
-    inline float angle_distance_screen(const Vector3& current, const Vector3& target) {
-        const float dp = normalize_angle(target.x - current.x);
-        const float dy = normalize_angle(target.y - current.y);
+    inline float angle_distance(float from, float to) {
+        float d = shortest_delta(from, to);
+        return std::fabs(d);
+    }
+
+    inline float angle_distance_2d(float pitch_from, float yaw_from, float pitch_to, float yaw_to) {
+        float dp = shortest_delta(pitch_from, pitch_to);
+        float dy = shortest_delta(yaw_from, yaw_to);
         return std::sqrt(dp * dp + dy * dy);
     }
 
@@ -93,7 +108,7 @@ namespace aimbot {
             }
 
             const Vector3 desired = angle_to(cam_pos, bone);
-            const float dist = angle_distance_screen(cur_euler, desired);
+            const float dist = angle_distance_2d(cur_euler.x, cur_euler.y, desired.x, desired.y);
 
             if (dist < best.screen_dist) {
                 best.bone_pos = bone;
@@ -109,30 +124,30 @@ namespace aimbot {
 
         const long long now = diag::now_ms();
         float dt = (g_last_tick_ms > 0) ? float(now - g_last_tick_ms) * 0.001f : 0.016f;
-        dt = std::clamp(dt, 0.001f, 0.1f);
+        dt = std::clamp(dt, 0.001f, 0.05f);
         g_last_tick_ms = now;
 
         const float smooth_factor = std::clamp(cfg::aim::smooth, 1.f, 30.f);
-        const float speed = 15.f / smooth_factor;
-        const float t = std::clamp(speed * dt, 0.01f, 1.f);
+        const float speed = 12.f / smooth_factor;
+        const float t = std::clamp(speed * dt, 0.005f, 1.f);
+
+        float dp = shortest_delta(cur_euler.x, best.desired_angles.x);
+        float dy = shortest_delta(cur_euler.y, best.desired_angles.y);
 
         Vector3 new_euler;
-        new_euler.x = cur_euler.x + normalize_angle(best.desired_angles.x - cur_euler.x) * t;
-        new_euler.y = cur_euler.y + normalize_angle(best.desired_angles.y - cur_euler.y) * t;
+        new_euler.x = wrap_360(cur_euler.x + dp * t);
+        new_euler.y = wrap_360(cur_euler.y + dy * t);
         new_euler.z = 0.f;
-
-        new_euler.x = normalize_angle(new_euler.x);
-        new_euler.y = normalize_angle(new_euler.y);
 
         mem_write(chain.main_bor + v100::bor_transform + sizeof(Vector3),
                   &new_euler, sizeof(Vector3));
 
         static long long aim_log = 0;
         if (diag::every(aim_log, 3000))
-            diag::log("AIMBOT", "target=0x%llx bone=%d dist=%.1f euler=(%.1f %.1f) -> (%.1f %.1f) smooth=%.1f dt=%.3f vis=%d",
+            diag::log("AIMBOT", "tgt=0x%llx bone=%d dist=%.1f cur=(%.1f %.1f) dst=(%.1f %.1f) out=(%.1f %.1f) sm=%.1f dt=%.3f",
                       (unsigned long long)best.object, cfg::aim::bone, best.screen_dist,
-                      cur_euler.x, cur_euler.y, new_euler.x, new_euler.y, smooth_factor, dt,
-                      cfg::aim::visible_check ? 1 : 0);
+                      cur_euler.x, cur_euler.y, best.desired_angles.x, best.desired_angles.y,
+                      new_euler.x, new_euler.y, smooth_factor, dt);
 
         g_last_write = now;
     }

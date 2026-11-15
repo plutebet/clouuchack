@@ -298,7 +298,7 @@ namespace ui::menu {
             c.y += row;
             text_at(dl, c, 48.f * k, c_text, a, "Aimbot Bone");
             c.y += 48.f * k;
-            static const char* const bones[] = {"Head", "Neck", "Body"};
+            static const char* const bones[] = {"Head", "Chest", "Legs"};
             segmented(dl, bones, 3, &cfg::aim::bone, c, cw, 58.f * k, a, k, live);
             c.y += 58.f * k + 16.f * k;
             slider_row(dl, "Aimbot FOV", &cfg::aim::fov, 5.f, 90.f, c, cw, row, a, k, live);
