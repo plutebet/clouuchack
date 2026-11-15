@@ -1,0 +1,29 @@
+name: Build Zenith
+
+on:
+  push:
+    branches: [ "claude/reverse-engineering-partner-hzm1fd" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup NDK
+      uses: nttld/setup-ndk@v1
+      id: ndk
+      with:
+        ndk-version: r26d
+
+    - name: Build with ndk-build
+      run: |
+        cd unity6-bypass
+        ${{ steps.ndk.outputs.ndk-path }}/ndk-build -j$(nproc) NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=jni/Android.mk NDK_APPLICATION_MK=jni/Application.mk
+
+    - name: Upload binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: eeeww-arm64
+        path: unity6-bypass/libs/arm64-v8a/eeeww
