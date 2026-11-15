@@ -12,18 +12,16 @@
 
 namespace aimbot {
 
-    inline Vector3 bone_position(const Vector3& feet, const Vector3& head, int bone) {
+    inline Vector3 real_bone_position(const player::PlayerPose& pose, int bone) {
         switch (bone) {
-            case 0: return head;
-            case 1: {
-                float t = 0.25f;
-                return Vector3(head.x, head.y - (head.y - feet.y) * t, head.z);
-            }
-            case 2: {
-                float t = 0.70f;
-                return Vector3(head.x, head.y - (head.y - feet.y) * t, head.z);
-            }
-            default: return head;
+            case 0: return pose.head;
+            case 1:
+                if (pose.has_chest) return pose.chest;
+                return Vector3(pose.head.x,
+                    pose.head.y - (pose.head.y - pose.feet.y) * 0.30f,
+                    pose.head.z);
+            case 2: return pose.feet;
+            default: return pose.head;
         }
     }
 
@@ -50,11 +48,6 @@ namespace aimbot {
         return Vector3(wrap_360(pitch), wrap_360(yaw), 0.f);
     }
 
-    inline float angle_distance(float from, float to) {
-        float d = shortest_delta(from, to);
-        return std::fabs(d);
-    }
-
     inline float angle_distance_2d(float pitch_from, float yaw_from, float pitch_to, float yaw_to) {
         float dp = shortest_delta(pitch_from, pitch_to);
         float dy = shortest_delta(yaw_from, yaw_to);
@@ -79,12 +72,10 @@ namespace aimbot {
         if (!cfg::aim::enabled) return;
         if (!chain.main_bor) return;
 
-        const cam::bor_pose pose = cam::read_bor(chain.main_bor);
-        if (!pose.valid) return;
-
         struct Raw { Vector3 position; Vector3 euler; };
         Raw raw{};
         if (!mem_read(chain.main_bor + v100::bor_transform, &raw, sizeof(raw))) return;
+        if (!std::isfinite(raw.position.x) || !std::isfinite(raw.euler.x)) return;
 
         const Vector3 cam_pos = raw.position;
         const Vector3 cur_euler = raw.euler;
@@ -92,13 +83,15 @@ namespace aimbot {
         target_info best{};
         best.screen_dist = cfg::aim::fov + 1.f;
 
+        int candidates = 0;
         for (size_t i = 1; i < frame.size(); ++i) {
             const player::frame_player& fp = frame[i];
             if (!fp.pose.valid) continue;
             if (fp.snap->team == local_team) continue;
             if (fp.want_health && !(fp.health.valid && fp.health.hp > 0)) continue;
 
-            const Vector3 bone = bone_position(fp.pose.feet, fp.pose.head, cfg::aim::bone);
+            const Vector3 bone = real_bone_position(fp.pose, cfg::aim::bone);
+            ++candidates;
 
             if (cfg::aim::visible_check) {
                 ImVec2 scr;
@@ -118,10 +111,15 @@ namespace aimbot {
             }
         }
 
+        static long long status_log = 0;
+        if (diag::every(status_log, 3000))
+            diag::log("AIMBOT", "candidates=%d best_valid=%d best_dist=%.1f fov=%.1f cam=(%.1f %.1f %.1f) euler=(%.1f %.1f) bone=%d chest=%s",
+                      candidates, best.valid ? 1 : 0, best.screen_dist, cfg::aim::fov,
+                      cam_pos.x, cam_pos.y, cam_pos.z, cur_euler.x, cur_euler.y, cfg::aim::bone,
+                      (frame.size() > 1 && frame[1].pose.has_chest) ? "real" : "fake");
+
         if (!best.valid || best.screen_dist > cfg::aim::fov) return;
         g_target = best;
-
-        const long long now = diag::now_ms();
 
         const float smooth_factor = std::clamp(cfg::aim::smooth, 1.f, 30.f);
         const float t = 1.f / smooth_factor;
@@ -139,12 +137,12 @@ namespace aimbot {
 
         static long long aim_log = 0;
         if (diag::every(aim_log, 3000))
-            diag::log("AIMBOT", "tgt=0x%llx bone=%d dist=%.1f cur=(%.1f %.1f) dst=(%.1f %.1f) out=(%.1f %.1f) t=%.2f dp=%.1f dy=%.1f",
-                      (unsigned long long)best.object, cfg::aim::bone, best.screen_dist,
+            diag::log("AIMBOT", "WRITE tgt=0x%llx dist=%.1f cur=(%.1f %.1f) dst=(%.1f %.1f) out=(%.1f %.1f) t=%.2f dp=%.1f dy=%.1f",
+                      (unsigned long long)best.object, best.screen_dist,
                       cur_euler.x, cur_euler.y, best.desired_angles.x, best.desired_angles.y,
                       new_euler.x, new_euler.y, t, dp, dy);
 
-        g_last_write = now;
+        g_last_write = diag::now_ms();
     }
 
     inline void draw_fov_circle(float camera_fov) {

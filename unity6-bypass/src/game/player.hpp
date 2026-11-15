@@ -26,8 +26,10 @@ namespace player {
     struct PlayerPose {
         Vector3 feet{};
         Vector3 head{};
+        Vector3 chest{};
         bool valid{false};
         bool has_head{false};
+        bool has_chest{false};
     };
     struct HealthInfo {
         int hp{0};
@@ -873,6 +875,21 @@ namespace player {
                 entry.has_last = true;
                 g_pose_fail_streak = 0;
                 fp.pose = candidate;
+                // Compute chest from the head ref's intermediate chain bones
+                if (entry.count > 0) {
+                    int head_ref = 0;
+                    if (entry.count > 1 && points[1].y > points[0].y) head_ref = 1;
+                    const hierarchy_ref& hr = entry.refs[head_ref];
+                    int skip = std::max(2, hr.chain_len / 3);
+                    if (hr.chain_len >= 4 && skip < hr.chain_len && s.ref_first[head_ref] >= 0) {
+                        Vector3 chest{};
+                        if (compose_chain(&batch.entries[size_t(s.ref_first[head_ref]) + skip],
+                                          hr.chain_len - skip, chest)) {
+                            fp.pose.chest = chest;
+                            fp.pose.has_chest = true;
+                        }
+                    }
+                }
                 continue;
             }
             if (stale) {

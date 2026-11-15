@@ -35,11 +35,11 @@ namespace esp {
 namespace aim {
     inline bool enabled = false;
     inline bool shooting_check = false;
-    inline bool visible_check = true;
+    inline bool visible_check = false;
     inline bool draw_fov = true;
-    inline int bone = 0;       // 0 Head, 1 Neck, 2 Body
+    inline int bone = 0;       // 0 Head, 1 Chest, 2 Legs
     inline float fov = 30.f;   // degrees
-    inline float smooth = 5.f; // 1 = instant, higher = slower
+    inline float smooth = 2.f; // 1 = instant snap, higher = slower
 }
 
 }
