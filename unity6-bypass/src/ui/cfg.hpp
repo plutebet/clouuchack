@@ -50,6 +50,8 @@ namespace trigger {
     inline int damage_hp = 1;
     inline bool force_lethal = false;
     inline bool draw_indicator = true;
+    inline float fire_x = 2380.f;     // fire button screen X (landscape)
+    inline float fire_y = 750.f;      // fire button screen Y (landscape)
 }
 
 }

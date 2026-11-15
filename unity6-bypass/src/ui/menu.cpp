@@ -339,6 +339,14 @@ namespace ui::menu {
             toggle_row(dl, "Auto Wall", &cfg::trigger::auto_wall, c, cw, srow, a, k, live);
             c.y += srow;
             toggle_row(dl, "Spread Pred.", &cfg::trigger::spread_prediction, c, cw, srow, a, k, live);
+            c.y += srow + gap * 1.5f;
+
+            // --- Fire Button ---
+            text_at(dl, c, hdr, c_text_dim, a, "Fire Button");
+            c.y += hdr;
+            slider_row(dl, "Fire X", &cfg::trigger::fire_x, 0.f, g_sw, c, cw, srow, a, k, live);
+            c.y += srow;
+            slider_row(dl, "Fire Y", &cfg::trigger::fire_y, 0.f, g_sh, c, cw, srow, a, k, live);
         }
 
         void visuals_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {

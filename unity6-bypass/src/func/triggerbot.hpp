@@ -8,41 +8,33 @@
 #include "../ui/cfg.hpp"
 #include "../other/memory.hpp"
 #include "../other/diag.hpp"
+#include "../other/touch_inject.hpp"
 #include <cmath>
 #include <algorithm>
 #include <chrono>
 
 // =============================================================================
 // Zenin triggerbot reconstruction — 1:1 algorithm, structs, flow
-// Reconstructed from zenin ARM64 binary:
-//   aim_check:    0x2a6e68
-//   raycast:      0x2ee4cc
-//   bone_resolve: 0x2ee64c
-//   main_loop:    0x2a6c2c
+// Firing via touch injection (external cheat cannot write weapon state)
 // =============================================================================
 
 namespace triggerbot {
 
-    // --- Zenin constants (from binary) ---
-    inline constexpr float ZENIN_MIN_DIST    = 2.26e-5f;   // 0x37bd3586
-    inline constexpr float ZENIN_SMALL_DIST  = 0.00997f;   // 0x3c234768
-    inline constexpr float ZENIN_BONE_SCALE  = 100.0f;     // 0x42c80000
+    inline constexpr float ZENIN_MIN_DIST    = 2.26e-5f;
+    inline constexpr float ZENIN_SMALL_DIST  = 0.00997f;
+    inline constexpr float ZENIN_BONE_SCALE  = 100.0f;
 
-    // --- Zenin trigger_result (output of aim_check, x19 in disasm) ---
-    // Offsets: [0]=status, [4]=distance, [8]=weight_x, [C]=weight_y,
-    //          [10]=confidence, [14]=adj_distance, [18]=iterations
     struct trigger_result {
-        uint8_t status;         // 0=miss, 1=hit, 2=near, 3=adjusted, 4=close
+        uint8_t status;
         uint8_t _pad[3];
-        float distance;         // distance to target
-        float weight_x;         // input weight (bone_radius)
-        float weight_y;         // adjusted weight
-        float confidence;       // 0.0..1.0 hit confidence
-        float adj_distance;     // adjusted/remaining distance
-        uint8_t iterations;     // capped at 6
+        float distance;
+        float weight_x;
+        float weight_y;
+        float confidence;
+        float adj_distance;
+        uint8_t iterations;
     };
 
-    // --- Zenin sorted_player (from main loop 0x2a6c2c) ---
     struct sorted_player {
         uint64_t object;
         Vector3 position;
@@ -51,8 +43,6 @@ namespace triggerbot {
         bool visible;
     };
 
-    // --- State ---
-    inline constexpr uint64_t kWeaponStateOffset = 0x88;
     inline bool g_firing{false};
     inline uint64_t g_target_obj{0};
 
@@ -61,24 +51,6 @@ namespace triggerbot {
     inline clock_t::time_point g_target_acquired{};
     inline bool g_delay_pending{false};
 
-    // --- Weapon helpers ---
-    inline uint64_t find_local_weapon_part(const player_snapshot& local) {
-        weapon::reset_if_context_changed();
-        if (!weapon::g_part_class)
-            weapon::g_part_class = typeinfo(v100::weapon_part_typeinfo);
-        auto it = weapon::g_players.find(local.object);
-        if (it != weapon::g_players.end() && it->second.part) {
-            if (weapon::g_part_class && rpm<uint64_t>(it->second.part) == weapon::g_part_class)
-                return it->second.part;
-        }
-        return weapon::find_part(local);
-    }
-
-    inline void set_weapon_state(uint64_t uyg_ptr, uint8_t state) {
-        mem_write(uyg_ptr + kWeaponStateOffset, &state, sizeof(state));
-    }
-
-    // --- Zenin get_bone_pos (bone selector, matches Zenin config 0x3C) ---
     inline Vector3 get_bone_pos(const player::frame_player& fp) {
         switch (cfg::trigger::bones) {
             case 0: return fp.pose.head;
@@ -98,10 +70,6 @@ namespace triggerbot {
         }
     }
 
-    // --- Zenin raycast (0x2ee4cc) ---
-    // Original calls game physics engine at 0x2eba3c (internal only).
-    // External equivalent: read visibility flag from player memory.
-    // Returns true if target is "visible" (raycast would hit).
     inline bool zenin_raycast(const Vector3& local_pos, const Vector3& target_pos,
                               float threshold, const matrix& view) {
         Vector3 dir = target_pos - local_pos;
@@ -122,11 +90,6 @@ namespace triggerbot {
         return dot > 0.0f;
     }
 
-    // --- Zenin aim_check (0x2a6e68) ---
-    // Reconstructed 1:1 from ARM64 disassembly.
-    // Params match Zenin: context(unused ext), direction vec, local_pos, distance, weight
-    // Returns trigger_result with status codes matching Zenin:
-    //   0=miss, 1=direct_hit, 2=near, 3=adjusted, 4=close_miss
     inline trigger_result zenin_aim_check(
         const Vector3& local_pos, const Vector3& target_pos,
         const matrix& view, float bone_radius_px, float max_dist)
@@ -157,10 +120,7 @@ namespace triggerbot {
 
         float dot = cam_fwd.x*norm_dir.x + cam_fwd.y*norm_dir.y + cam_fwd.z*norm_dir.z;
 
-        // Zenin angular threshold: bone_radius pixels → angle in radians
-        // At FOV 60° on 1080p, 1 pixel ≈ 0.056°. bone_radius=8px → ~0.45° → cos≈0.99997
-        // Zenin scales by distance: closer targets have larger angular size
-        float fov_rad = 1.0472f; // 60 deg default
+        float fov_rad = 1.0472f;
         float screen_h = 1080.0f;
         float px_to_rad = fov_rad / screen_h;
         float threshold_rad = bone_radius_px * px_to_rad;
@@ -187,8 +147,7 @@ namespace triggerbot {
         return res;
     }
 
-    // --- Zenin main tick (0x2a6c2c) ---
-    // 1:1 algorithm: sort players → distance check → visibility → aim_check → fire
+    // Main tick — fires via touch injection on the fire button
     inline void tick(const cam::main_chain& chain,
                      const std::vector<player::frame_player>& frame, int local_team,
                      const matrix& view, const matrix& projection) {
@@ -198,21 +157,14 @@ namespace triggerbot {
         if (!cfg::trigger::enabled) {
             g_delay_pending = false;
             g_target_obj = 0;
-            if (was_firing && !frame.empty() && frame[0].snap) {
-                uint64_t uyg = find_local_weapon_part(*frame[0].snap);
-                if (uyg) set_weapon_state(uyg, 0);
-            }
+            if (was_firing) touch_inject::fire_up();
             return;
         }
         if (frame.empty() || !frame[0].snap) return;
 
         const player_snapshot& local = *frame[0].snap;
-        const uint64_t uyg_ptr = find_local_weapon_part(local);
-        if (!uyg_ptr) return;
-
         const auto now = clock_t::now();
 
-        // Zenin: interval between shots
         if (cfg::trigger::interval_ms > 0 && was_firing) {
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_last_fire).count();
             if (elapsed < cfg::trigger::interval_ms) {
@@ -223,7 +175,6 @@ namespace triggerbot {
 
         Vector3 local_pos = frame[0].pose.valid ? frame[0].pose.head : Vector3{};
 
-        // Zenin 0x2a6c50: iterate sorted players
         for (size_t i = 1; i < frame.size(); ++i) {
             const player::frame_player& fp = frame[i];
             if (!fp.pose.valid) continue;
@@ -232,7 +183,6 @@ namespace triggerbot {
 
             Vector3 bone = get_bone_pos(fp);
 
-            // Zenin 0x2a6c50: 3D distance check
             float dx = local_pos.x - bone.x;
             float dy = local_pos.y - bone.y;
             float dz = local_pos.z - bone.z;
@@ -240,20 +190,16 @@ namespace triggerbot {
             if (dist <= ZENIN_MIN_DIST || !std::isfinite(dist)) continue;
             if (dist > cfg::trigger::max_distance) continue;
 
-            // Zenin 0x2a6ca0: visibility check (config.check_visible)
             if (cfg::trigger::visible_check) {
                 if (!zenin_raycast(local_pos, bone, dist, view)) continue;
             }
 
-            // Zenin 0x2a6d30: aim_check — the core
             trigger_result result = zenin_aim_check(
                 local_pos, bone, view,
                 cfg::trigger::bone_radius, cfg::trigger::max_distance);
 
-            // Zenin: result.status must be 1 (hit) or 2 (near) to fire
             if (result.status != 1 && result.status != 2) continue;
 
-            // Zenin timing: delay before firing
             if (cfg::trigger::delay_ms > 0) {
                 if (!g_delay_pending || g_target_obj != fp.snap->object) {
                     g_delay_pending = true;
@@ -265,8 +211,8 @@ namespace triggerbot {
                 if (waited < cfg::trigger::delay_ms) return;
             }
 
-            // Zenin 0x2a6dc8: FIRE (output->hit = 1)
-            set_weapon_state(uyg_ptr, 1);
+            // Fire via touch injection
+            touch_inject::fire_down(cfg::trigger::fire_x, cfg::trigger::fire_y);
             g_firing = true;
             g_target_obj = fp.snap->object;
             g_last_fire = now;
@@ -274,17 +220,18 @@ namespace triggerbot {
 
             static long long trig_log = 0;
             if (diag::every(trig_log, 2000))
-                diag::log("TRIGGER", "FIRE s=%d d=%.1f c=%.2f obj=0x%llx",
+                diag::log("TRIGGER", "FIRE s=%d d=%.1f c=%.2f obj=0x%llx touch=(%.0f,%.0f)",
                           result.status, result.distance, result.confidence,
-                          (unsigned long long)fp.snap->object);
+                          (unsigned long long)fp.snap->object,
+                          cfg::trigger::fire_x, cfg::trigger::fire_y);
             return;
         }
 
-        // Zenin 0x2a6e10: no target — clear
+        // No target — release fire button
         g_delay_pending = false;
         g_target_obj = 0;
         if (was_firing)
-            set_weapon_state(uyg_ptr, 0);
+            touch_inject::fire_up();
     }
 
     inline void draw_indicator() {
