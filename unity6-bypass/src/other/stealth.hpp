@@ -240,6 +240,30 @@ inline ssize_t safe_vm_readv(pid_t pid, const struct iovec* local,
     #endif
 }
 
+// ─── 8b. direct syscall для process_vm_writev (aimbot) ─────────────────────
+
+inline ssize_t safe_vm_writev(pid_t pid, const struct iovec* local,
+                              unsigned long liovcnt,
+                              const struct iovec* remote,
+                              unsigned long riovcnt, unsigned long flags) {
+    #if defined(__aarch64__)
+    register long x8 __asm__("x8") = 271;
+    register long x0 __asm__("x0") = pid;
+    register long x1 __asm__("x1") = (long)local;
+    register long x2 __asm__("x2") = liovcnt;
+    register long x3 __asm__("x3") = (long)remote;
+    register long x4 __asm__("x4") = riovcnt;
+    register long x5 __asm__("x5") = flags;
+    __asm__ volatile("svc #0"
+        : "+r"(x0)
+        : "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
+        : "memory", "cc");
+    return x0;
+    #else
+    return syscall(SYS_process_vm_writev, pid, local, liovcnt, remote, riovcnt, flags);
+    #endif
+}
+
 // ─── 9. undumpable ──────────────────────────────────────────────────────────
 
 inline void make_undumpable() {
@@ -439,6 +463,7 @@ inline void init(int argc, char** argv, const stealth_opts& opts) {
     diag::log("STEALTH", "  [+] Process hiding: mount namespace + /proc bind mount");
     diag::log("STEALTH", "  [+] Overlay: surface named 'StatusBar' (system UI camouflage)");
     diag::log("STEALTH", "  [+] process_vm_readv: direct syscall (no libc hooks), no TracerPid");
+    diag::log("STEALTH", "  [+] process_vm_writev: direct syscall (SYS 271), no TracerPid, no ptrace");
     diag::log("STEALTH", "  [+] SELinux: patched for our context");
     diag::log("STEALTH", "  [+] Anti-ptrace: self-attach guard");
     diag::log("STEALTH", "  [+] VMA names: cleaned");

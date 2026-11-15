@@ -6,6 +6,7 @@
 // ================================================================================
 
 #include "visuals.hpp"
+#include "aimbot.hpp"
 #include "../game/game.hpp"
 #include "../game/math.hpp"
 #include "../game/player.hpp"
@@ -445,6 +446,13 @@ void visuals::draw() {
     }
     g_camera = selected_camera;
     selected_kind_prev = selected_kind;
+
+    // ---- aimbot tick (runs before ESP draw) ----
+    if (cfg::aim::enabled && !Cameras.empty() && chain.main_bor) {
+        crash::stage("aimbot");
+        aimbot::tick(chain, LocalPosition, s_frame, LocalTeam);
+    }
+    aimbot::draw_fov_circle();
 
     crash::stage("esp-draw");
     // Box from the feet to just above the head: the head point is the eye

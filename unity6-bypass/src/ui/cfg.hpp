@@ -32,6 +32,15 @@ namespace esp {
     inline ImVec4 health_col = ImVec4(240/255.f, 64/255.f, 90/255.f, 1.f);
 }
 
+namespace aim {
+    inline bool enabled = false;
+    inline bool shooting_check = false;
+    inline bool draw_fov = true;
+    inline int bone = 0;       // 0 Head, 1 Neck, 2 Body
+    inline float fov = 30.f;   // degrees
+    inline float smooth = 5.f; // 1 = instant, higher = slower
+}
+
 }
 
 

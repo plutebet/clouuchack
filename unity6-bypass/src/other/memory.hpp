@@ -99,6 +99,16 @@ namespace sys {
         return sc6(SYS_vm_read, pid, reinterpret_cast<long>(l), lc, reinterpret_cast<long>(r), rc, 0);
     }
 
+    #if defined(__aarch64__)
+    static constexpr long SYS_vm_write = 271;
+    #elif defined(__x86_64__)
+    static constexpr long SYS_vm_write = 311;
+    #endif
+
+    static inline long vm_write(int pid, struct iovec* l, unsigned long lc, struct iovec* r, unsigned long rc) {
+        return sc6(SYS_vm_write, pid, reinterpret_cast<long>(l), lc, reinterpret_cast<long>(r), rc, 0);
+    }
+
 }
 
 struct linux_dirent64 {
@@ -148,12 +158,28 @@ inline bool mem_read(uint64_t a, void* b, size_t l) {
     return true;
 }
 
-// Read-only memory access. Write helpers are deliberately absent: the overlay never writes to the game.
 template<typename T>
 inline T rpm(uint64_t a) {
     T v{};
     mem_read(a, &v, sizeof(T));
     return v;
+}
+
+inline bool mem_write(uint64_t a, const void* b, size_t l) {
+    if (proc::pid < 0 || a == 0 || l == 0 || b == nullptr || a < 0x1000) return false;
+    struct iovec loc[1];
+    struct iovec rem[1];
+    loc[0].iov_base = const_cast<void*>(b);
+    loc[0].iov_len = l;
+    rem[0].iov_base = reinterpret_cast<void*>(a);
+    rem[0].iov_len = l;
+    ssize_t result = sys::vm_write(proc::pid, loc, 1, rem, 1);
+    return result == static_cast<long>(l);
+}
+
+template<typename T>
+inline bool wpm(uint64_t a, const T& v) {
+    return mem_write(a, &v, sizeof(T));
 }
 
 // Several remote reads in one process_vm_readv. Every call takes the game's

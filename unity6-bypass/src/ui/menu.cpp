@@ -20,8 +20,10 @@
 #include "Android_draw/draw.h"
 #include "fonts/menu/butterfly.h"
 #include "../other/status.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cfloat>
+#include <cstdio>
 #include <string>
 
 namespace ui::menu {
@@ -245,6 +247,63 @@ namespace ui::menu {
             dl->AddRectFilled(ImVec2(hue_min.x - 3.f * k, hy - 2.f * k), ImVec2(hue_max.x + 3.f * k, hy + 2.f * k), IM_COL32(255, 255, 255, int(255 * a)), 2.f * k);
         }
 
+        bool slider_row(ImDrawList* dl, const char* label, float* v, float mn, float mx,
+                        const ImVec2& pos, float w, float h, float a, float k, bool live) {
+            text_at(dl, pos, h, c_text, a, label);
+            const float sw = 200.f * k, sh = 8.f * k;
+            const float tx = pos.x + w - sw;
+            const float ty = pos.y + (h - sh) * 0.5f;
+            const ImVec2 tmin(tx, ty - 12.f * k), tmax(tx + sw, ty + sh + 12.f * k);
+            dl->AddRectFilled(ImVec2(tx, ty), ImVec2(tx + sw, ty + sh),
+                              col(c_widget, a), sh * 0.5f);
+            const float pct = (*v - mn) / (mx - mn);
+            dl->AddRectFilled(ImVec2(tx, ty), ImVec2(tx + sw * pct, ty + sh),
+                              col(c_green, a), sh * 0.5f);
+            const float kx = tx + sw * pct, ky = ty + sh * 0.5f;
+            dl->AddCircleFilled(ImVec2(kx, ky), 12.f * k, col(c_green, a), 20);
+            dl->AddCircleFilled(ImVec2(kx, ky), 8.f * k, col(c_white, a), 20);
+            ImFont* f = menu_font();
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%.1f", *v);
+            const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.f, buf);
+            dl->AddText(f, f->FontSize, ImVec2(tx + sw + 10.f * k, pos.y + (h - ts.y) * 0.5f),
+                        col(c_text, a), buf);
+            static std::string s_drag_id;
+            ImGuiIO& io = ImGui::GetIO();
+            std::string sid = std::string("sl_") + label;
+            if (live && !g_color_open) {
+                if (ImGui::IsMouseClicked(0) && inside(io.MousePos, tmin, tmax))
+                    s_drag_id = sid;
+                if (s_drag_id == sid && io.MouseDown[0]) {
+                    float t = (io.MousePos.x - tx) / sw;
+                    *v = mn + std::clamp(t, 0.f, 1.f) * (mx - mn);
+                    *v = std::round(*v * 10.f) / 10.f;
+                }
+                if (!io.MouseDown[0] && s_drag_id == sid) s_drag_id.clear();
+            }
+            return false;
+        }
+
+        void aimbot_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
+            const float pad = k_pad * k, row = k_row * k;
+            const float cw = amax.x - amin.x - pad * 2.f;
+            ImVec2 c(amin.x + pad, amin.y + pad * 0.5f);
+            toggle_row(dl, "Aimbot", &cfg::aim::enabled, c, cw, row, a, k, live);
+            c.y += row;
+            toggle_row(dl, "Shooting Check", &cfg::aim::shooting_check, c, cw, row, a, k, live);
+            c.y += row;
+            toggle_row(dl, "Draw FOV", &cfg::aim::draw_fov, c, cw, row, a, k, live);
+            c.y += row;
+            text_at(dl, c, 48.f * k, c_text, a, "Aimbot Bone");
+            c.y += 48.f * k;
+            static const char* const bones[] = {"Head", "Neck", "Body"};
+            segmented(dl, bones, 3, &cfg::aim::bone, c, cw, 58.f * k, a, k, live);
+            c.y += 58.f * k + 16.f * k;
+            slider_row(dl, "Aimbot FOV", &cfg::aim::fov, 5.f, 90.f, c, cw, row, a, k, live);
+            c.y += row;
+            slider_row(dl, "Smooth", &cfg::aim::smooth, 1.f, 30.f, c, cw, row, a, k, live);
+        }
+
         void visuals_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
             const float pad = k_pad * k, row = k_row * k;
             const float cw = amax.x - amin.x - pad * 2.f;
@@ -363,12 +422,14 @@ namespace ui::menu {
             g_color_open = false;
         }
 
-        // "Visuals" is the only page; "Unload" is an action: one tap unloads.
-        const char* tabs[] = {"Visuals", "Unload"};
-        for (int i = 0; i < 2; ++i) {
+        static int g_tab = 0;
+        const char* tabs[] = {"Aimbot", "Visuals", "Unload"};
+        const int tab_count = 3;
+        for (int i = 0; i < tab_count; ++i) {
             const ImVec2 tmin(p.x, logo_max.y + k_tab_h * k * float(i)), tmax(p.x + sbw, tmin.y + k_tab_h * k);
-            if (i == 1 && live && tapped(tmin, tmax)) status::g_quit_request = true;
-            const float sel = i == 0 ? 1.f : (held(tmin, tmax) ? 1.f : 0.f);
+            if (i == tab_count - 1 && live && tapped(tmin, tmax)) status::g_quit_request = true;
+            else if (i < tab_count - 1 && live && tapped(tmin, tmax)) g_tab = i;
+            const float sel = (i == g_tab && i < tab_count - 1) ? 1.f : (held(tmin, tmax) ? 1.f : 0.f);
             const float t = anim(std::string("tab_") + tabs[i], sel, 16.f);
             if (t > 0.01f) dl->AddRectFilled(tmin, tmax, col(c_tab_sel, a * t));
             ImFont* f = menu_font();
@@ -380,7 +441,8 @@ namespace ui::menu {
         // ---- content ----
         const ImVec2 amin(p.x + sbw, p.y), amax(pmax.x, pmax.y);
         dl->PushClipRect(amin, amax, true);
-        visuals_tab(dl, amin, amax, a, k, live);
+        if (g_tab == 0) aimbot_tab(dl, amin, amax, a, k, live);
+        else             visuals_tab(dl, amin, amax, a, k, live);
         dl->PopClipRect();
 
         dl->PopClipRect();
