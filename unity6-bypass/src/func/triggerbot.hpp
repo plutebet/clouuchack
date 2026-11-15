@@ -4,6 +4,7 @@
 #include "../game/math.hpp"
 #include "../game/player.hpp"
 #include "../game/camera.hpp"
+#include "../game/weapon.hpp"
 #include "../ui/cfg.hpp"
 #include "../other/memory.hpp"
 #include "../other/diag.hpp"
@@ -12,59 +13,50 @@
 
 namespace triggerbot {
 
-    inline Vector3 bone_pos(const player::PlayerPose& pose, int bone) {
-        switch (bone) {
-            case 0: return pose.head;
-            case 1:
-                if (pose.has_chest) return pose.chest;
-                return Vector3(pose.head.x,
-                    pose.head.y - (pose.head.y - pose.feet.y) * 0.30f,
-                    pose.head.z);
-            case 2: return pose.feet;
-            default: return pose.head;
-        }
-    }
-
-    inline float wrap_360(float a) {
-        a = std::fmod(a, 360.f);
-        if (a < 0.f) a += 360.f;
-        return a;
-    }
-
-    inline Vector3 angle_to(const Vector3& from, const Vector3& to) {
-        const float dx = to.x - from.x;
-        const float dy = to.y - from.y;
-        const float dz = to.z - from.z;
-        const float dist_xz = std::sqrt(dx * dx + dz * dz);
-        float pitch = -std::atan2(dy, dist_xz) * (180.f / 3.14159265f);
-        float yaw   =  std::atan2(dx, dz) * (180.f / 3.14159265f);
-        return Vector3(wrap_360(pitch), wrap_360(yaw), 0.f);
-    }
+    // WeaponContext is embedded in uyg (WeaponPart) at +0x30.
+    // State<WeaponState>.Value._raw is at WeaponContext+0x58.
+    // buw enum: Idle=0, Attack=1, Reload=2, Inspect=3, Take=4, Charge=5.
+    inline constexpr uint64_t kWeaponStateOffset = 0x88; // uyg + 0x30 + 0x58
 
     struct trigger_state {
         bool on_target{false};
         uint64_t target_object{0};
-        Vector3 snap_angles{};
+        bool firing{false};
     };
     inline trigger_state g_state{};
+
+    inline uint64_t find_local_weapon_part(const player_snapshot& local) {
+        weapon::reset_if_context_changed();
+        if (!weapon::g_part_class)
+            weapon::g_part_class = typeinfo(v100::weapon_part_typeinfo);
+        auto it = weapon::g_players.find(local.object);
+        if (it != weapon::g_players.end() && it->second.part) {
+            if (weapon::g_part_class && rpm<uint64_t>(it->second.part) == weapon::g_part_class)
+                return it->second.part;
+        }
+        return weapon::find_part(local);
+    }
+
+    inline void set_weapon_state(uint64_t uyg_ptr, uint8_t state) {
+        mem_write(uyg_ptr + kWeaponStateOffset, &state, sizeof(state));
+    }
 
     inline void tick(const cam::main_chain& chain,
                      const std::vector<player::frame_player>& frame, int local_team,
                      const matrix& view, const matrix& projection) {
+        const bool was_firing = g_state.firing;
         g_state = {};
         if (!cfg::trigger::enabled) return;
-        if (!chain.main_bor) return;
+        if (frame.empty() || !frame[0].snap) return;
 
-        struct Raw { Vector3 position; Vector3 euler; };
-        Raw raw{};
-        if (!mem_read(chain.main_bor + v100::bor_transform, &raw, sizeof(raw))) return;
-        if (!std::isfinite(raw.position.x) || !std::isfinite(raw.euler.x)) return;
+        const player_snapshot& local = *frame[0].snap;
+        const uint64_t uyg_ptr = find_local_weapon_part(local);
+        if (!uyg_ptr) return;
 
         const float cx = g_sw * 0.5f;
         const float cy = g_sh * 0.5f;
         const float scale = cfg::trigger::hitbox_scale;
 
-        const uint64_t* lock_obj = cfg::trigger::target_lock ? &g_state.target_object : nullptr;
         static uint64_t s_locked = 0;
 
         for (size_t i = 1; i < frame.size(); ++i) {
@@ -89,30 +81,25 @@ namespace triggerbot {
 
                 if (cfg::trigger::target_lock && s_locked && s_locked != fp.snap->object) continue;
 
-                const Vector3 bone = bone_pos(fp.pose, cfg::trigger::bone);
-                const Vector3 angles = angle_to(raw.position, bone);
-
-                Vector3 snap;
-                snap.x = angles.x;
-                snap.y = angles.y;
-                snap.z = 0.f;
-
-                mem_write(chain.main_bor + v100::bor_transform + sizeof(Vector3),
-                          &snap, sizeof(Vector3));
+                set_weapon_state(uyg_ptr, 1);
 
                 g_state.on_target = true;
                 g_state.target_object = fp.snap->object;
-                g_state.snap_angles = snap;
+                g_state.firing = true;
                 s_locked = fp.snap->object;
 
                 static long long trig_log = 0;
                 if (diag::every(trig_log, 2000))
-                    diag::log("TRIGGER", "SNAP obj=0x%llx bone=%d euler=(%.1f %.1f) hitbox=(%.0f,%.0f)-(%.0f,%.0f)",
-                              (unsigned long long)fp.snap->object, cfg::trigger::bone,
-                              snap.x, snap.y, mid_x - half_w, y1, mid_x + half_w, y2);
+                    diag::log("TRIGGER", "FIRE obj=0x%llx hitbox=(%.0f,%.0f)-(%.0f,%.0f)",
+                              (unsigned long long)fp.snap->object,
+                              mid_x - half_w, y1, mid_x + half_w, y2);
                 return;
             }
         }
+
+        if (was_firing)
+            set_weapon_state(uyg_ptr, 0);
+
         s_locked = 0;
     }
 
