@@ -114,8 +114,7 @@ namespace triggerbot {
         dir.y *= inv_dist;
         dir.z *= inv_dist;
 
-        // Camera forward from view matrix
-        Vector3 cam_fwd(-view.m[2], -view.m[6], -view.m[10]);
+        Vector3 cam_fwd(-view.m13, -view.m23, -view.m33);
         float fwd_len = std::sqrt(cam_fwd.x*cam_fwd.x + cam_fwd.y*cam_fwd.y + cam_fwd.z*cam_fwd.z);
         if (fwd_len < ZENIN_MIN_DIST) return false;
         cam_fwd.x /= fwd_len; cam_fwd.y /= fwd_len; cam_fwd.z /= fwd_len;
@@ -170,8 +169,7 @@ namespace triggerbot {
         norm_dir.y = dir.y * inv_dist;
         norm_dir.z = dir.z * inv_dist;
 
-        // Camera forward vector
-        Vector3 cam_fwd(-view.m[2], -view.m[6], -view.m[10]);
+        Vector3 cam_fwd(-view.m13, -view.m23, -view.m33);
         float fwd_len = std::sqrt(cam_fwd.x*cam_fwd.x + cam_fwd.y*cam_fwd.y + cam_fwd.z*cam_fwd.z);
         if (fwd_len < ZENIN_MIN_DIST) return res;
         cam_fwd.x /= fwd_len; cam_fwd.y /= fwd_len; cam_fwd.z /= fwd_len;
