@@ -421,7 +421,7 @@ namespace ui::menu {
         }
 
         static int g_tab = 0;
-        const char* tabs[] = {"Aimbot", "Visuals", "Unload"};
+        const char* tabs[] = {"Triggerbot", "Visuals", "Unload"};
         const int tab_count = 3;
         for (int i = 0; i < tab_count; ++i) {
             const ImVec2 tmin(p.x, logo_max.y + k_tab_h * k * float(i)), tmax(p.x + sbw, tmin.y + k_tab_h * k);

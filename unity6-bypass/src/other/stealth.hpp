@@ -240,7 +240,7 @@ inline ssize_t safe_vm_readv(pid_t pid, const struct iovec* local,
     #endif
 }
 
-// ─── 8b. direct syscall для process_vm_writev (aimbot) ─────────────────────
+// ─── 8b. direct syscall для process_vm_writev (triggerbot) ─────────────────
 
 inline ssize_t safe_vm_writev(pid_t pid, const struct iovec* local,
                               unsigned long liovcnt,
