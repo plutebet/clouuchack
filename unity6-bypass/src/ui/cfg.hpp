@@ -34,13 +34,8 @@ namespace esp {
 
 namespace trigger {
     inline bool enabled = false;
-    inline int mode = 0;              // 0 Screen (W2S bbox), 1 3D Raycast (Zenin)
-    inline int bone = 0;              // 0 Head, 1 Chest, 2 Legs
-    inline float hitbox_scale = 1.0f; // screen hitbox multiplier (mode 0)
-    inline float max_distance = 50.f; // max 3D distance in meters (mode 1)
-    inline bool check_visible = true; // require LOS raycast (mode 1)
+    inline float hitbox_scale = 1.0f;
     inline bool draw_indicator = true;
-    inline bool target_lock = true;   // lock onto first target until crosshair leaves
 }
 
 }
