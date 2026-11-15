@@ -34,7 +34,21 @@ namespace esp {
 
 namespace trigger {
     inline bool enabled = false;
-    inline float hitbox_scale = 1.0f;
+    inline int mode = 0;               // 0 Bones
+    inline int bones = 0;              // 0 Head, 1 Upper, 2 Body, 3 Lower
+    inline float bone_radius = 8.0f;   // px radius around bone on screen
+    inline int delay_ms = 0;           // ms before firing
+    inline int interval_ms = 120;      // ms between shots
+    inline float max_distance = 40.f;  // meters
+    inline bool scoped_only = false;
+    inline bool untouchable_check = false;
+    inline bool visible_check = true;
+    inline int method = 0;             // 0 Mixed, 1 Head, 2 Body
+    inline bool auto_wall = false;
+    inline bool spread_prediction = false;
+    inline bool min_damage = false;
+    inline int damage_hp = 1;
+    inline bool force_lethal = false;
     inline bool draw_indicator = true;
 }
 

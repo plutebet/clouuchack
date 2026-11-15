@@ -286,13 +286,49 @@ namespace ui::menu {
 
         void triggerbot_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
             const float pad = k_pad * k, row = k_row * k;
-            const float cw = amax.x - amin.x - pad * 2.f;
+            const float half_w = (amax.x - amin.x - pad * 3.f) * 0.5f;
+            const float srow = row * 0.85f;
+
+            // Left column
             ImVec2 c(amin.x + pad, amin.y + pad * 0.5f);
-            toggle_row(dl, "Triggerbot", &cfg::trigger::enabled, c, cw, row, a, k, live);
-            c.y += row;
-            toggle_row(dl, "Indicator", &cfg::trigger::draw_indicator, c, cw, row, a, k, live);
-            c.y += row;
-            slider_row(dl, "Hitbox Scale", &cfg::trigger::hitbox_scale, 0.5f, 3.0f, c, cw, row, a, k, live);
+            toggle_row(dl, "Enable", &cfg::trigger::enabled, c, half_w, srow, a, k, live);
+            c.y += srow;
+            text_at(dl, c, 36.f * k, c_text, a, "Bones");
+            c.y += 36.f * k;
+            static const char* const bones[] = {"Head", "Upper", "Body", "Lower"};
+            segmented(dl, bones, 4, &cfg::trigger::bones, c, half_w, 48.f * k, a, k, live);
+            c.y += 48.f * k + 8.f * k;
+            slider_row(dl, "Bone Radius", &cfg::trigger::bone_radius, 1.f, 30.f, c, half_w, srow, a, k, live);
+            c.y += srow + 8.f * k;
+            text_at(dl, c, 32.f * k, c_text_dim, a, "Timing");
+            c.y += 32.f * k;
+            {
+                float delay_f = (float)cfg::trigger::delay_ms;
+                slider_row(dl, "Delay", &delay_f, 0.f, 500.f, c, half_w, srow, a, k, live);
+                cfg::trigger::delay_ms = (int)delay_f;
+            }
+            c.y += srow;
+            {
+                float interval_f = (float)cfg::trigger::interval_ms;
+                slider_row(dl, "Interval", &interval_f, 0.f, 500.f, c, half_w, srow, a, k, live);
+                cfg::trigger::interval_ms = (int)interval_f;
+            }
+
+            // Right column
+            ImVec2 r(amin.x + pad + half_w + pad, amin.y + pad * 0.5f);
+            text_at(dl, r, 32.f * k, c_text_dim, a, "Limits");
+            r.y += 32.f * k;
+            slider_row(dl, "Distance", &cfg::trigger::max_distance, 5.f, 100.f, r, half_w, srow, a, k, live);
+            r.y += srow + 8.f * k;
+            text_at(dl, r, 32.f * k, c_text_dim, a, "Checks");
+            r.y += 32.f * k;
+            toggle_row(dl, "Visible Check", &cfg::trigger::visible_check, r, half_w, srow, a, k, live);
+            r.y += srow;
+            toggle_row(dl, "Scoped Only", &cfg::trigger::scoped_only, r, half_w, srow, a, k, live);
+            r.y += srow;
+            toggle_row(dl, "Auto Wall", &cfg::trigger::auto_wall, r, half_w, srow, a, k, live);
+            r.y += srow;
+            toggle_row(dl, "Spread Pred.", &cfg::trigger::spread_prediction, r, half_w, srow, a, k, live);
         }
 
         void visuals_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {

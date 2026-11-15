@@ -7,14 +7,23 @@
 #include "../game/weapon.hpp"
 #include "../ui/cfg.hpp"
 #include "../other/memory.hpp"
+#include "../other/diag.hpp"
 #include <cmath>
 #include <algorithm>
+#include <chrono>
 
 namespace triggerbot {
 
     inline constexpr uint64_t kWeaponStateOffset = 0x88;
+    inline constexpr float MIN_DIST = 0.001f;
 
     inline bool g_firing{false};
+    inline uint64_t g_target_obj{0};
+
+    using clock_t = std::chrono::steady_clock;
+    inline clock_t::time_point g_last_fire{};
+    inline clock_t::time_point g_target_acquired{};
+    inline bool g_delay_pending{false};
 
     inline uint64_t find_local_weapon_part(const player_snapshot& local) {
         weapon::reset_if_context_changed();
@@ -32,12 +41,37 @@ namespace triggerbot {
         mem_write(uyg_ptr + kWeaponStateOffset, &state, sizeof(state));
     }
 
+    // Zenin-style: get target bone position based on config
+    inline Vector3 get_bone_pos(const player::frame_player& fp) {
+        switch (cfg::trigger::bones) {
+            case 0: return fp.pose.head;
+            case 1: return fp.pose.has_chest ? fp.pose.chest : fp.pose.head;
+            case 2: return fp.pose.has_chest ? fp.pose.chest :
+                           Vector3((fp.pose.head.x + fp.pose.feet.x) * 0.5f,
+                                   (fp.pose.head.y + fp.pose.feet.y) * 0.5f,
+                                   (fp.pose.head.z + fp.pose.feet.z) * 0.5f);
+            case 3: return fp.pose.feet;
+            default: return fp.pose.head;
+        }
+    }
+
+    // Zenin algorithm: 3D distance + screen bone radius + visibility
     inline void tick(const cam::main_chain& chain,
                      const std::vector<player::frame_player>& frame, int local_team,
                      const matrix& view, const matrix& projection) {
         const bool was_firing = g_firing;
         g_firing = false;
-        if (!cfg::trigger::enabled) return;
+        if (!cfg::trigger::enabled) {
+            g_delay_pending = false;
+            g_target_obj = 0;
+            if (was_firing) {
+                if (!frame.empty() && frame[0].snap) {
+                    uint64_t uyg = find_local_weapon_part(*frame[0].snap);
+                    if (uyg) set_weapon_state(uyg, 0);
+                }
+            }
+            return;
+        }
         if (frame.empty() || !frame[0].snap) return;
 
         const player_snapshot& local = *frame[0].snap;
@@ -46,6 +80,18 @@ namespace triggerbot {
 
         const float cx = g_sw * 0.5f;
         const float cy = g_sh * 0.5f;
+        const auto now = clock_t::now();
+
+        // Interval check (Zenin: minimum ms between shots)
+        if (cfg::trigger::interval_ms > 0 && was_firing) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_last_fire).count();
+            if (elapsed < cfg::trigger::interval_ms) {
+                g_firing = was_firing;
+                return;
+            }
+        }
+
+        Vector3 local_pos = frame[0].pose.valid ? frame[0].pose.head : Vector3{};
 
         for (size_t i = 1; i < frame.size(); ++i) {
             const player::frame_player& fp = frame[i];
@@ -53,26 +99,56 @@ namespace triggerbot {
             if (fp.snap->team == local_team) continue;
             if (fp.want_health && !(fp.health.valid && fp.health.hp > 0)) continue;
 
-            // W2S head + feet → bounding box
-            ImVec2 scr_head, scr_feet;
-            if (!world_to_screen(fp.pose.head + Vector3(0.f, 0.15f, 0.f), view, projection, scr_head)) continue;
-            if (!world_to_screen(fp.pose.feet, view, projection, scr_feet)) continue;
+            Vector3 bone = get_bone_pos(fp);
 
-            float y1 = std::min(scr_head.y, scr_feet.y);
-            float y2 = std::max(scr_head.y, scr_feet.y);
-            float h = y2 - y1;
-            if (h < 5.f) continue;
-            float half_w = h * 0.25f * cfg::trigger::hitbox_scale;
-            float mid_x = (scr_head.x + scr_feet.x) * 0.5f;
+            // Step 1: 3D distance check (Zenin: config.max_distance)
+            float dist = calculate_distance(local_pos, bone);
+            if (dist <= MIN_DIST || !std::isfinite(dist)) continue;
+            if (dist > cfg::trigger::max_distance) continue;
 
-            if (cx >= mid_x - half_w && cx <= mid_x + half_w &&
-                cy >= y1 && cy <= y2) {
-                set_weapon_state(uyg_ptr, 1);
-                g_firing = true;
-                return;
+            // Step 2: Visible check (Zenin: visibility_data[0x34C])
+            if (cfg::trigger::visible_check) {
+                if (fp.want_health && fp.health.valid) {
+                    // Use health as proxy for visibility — if we can read hp, player is loaded
+                } else {
+                    continue;
+                }
             }
+
+            // Step 3: Project bone to screen and check radius (Zenin: bone_radius)
+            ImVec2 scr;
+            if (!world_to_screen(bone, view, projection, scr)) continue;
+
+            float dx = scr.x - cx;
+            float dy = scr.y - cy;
+            float screen_dist = std::sqrt(dx * dx + dy * dy);
+
+            if (screen_dist > cfg::trigger::bone_radius) continue;
+
+            // Step 4: Delay check (Zenin: delay_ms before firing)
+            if (cfg::trigger::delay_ms > 0) {
+                if (!g_delay_pending || g_target_obj != fp.snap->object) {
+                    g_delay_pending = true;
+                    g_target_acquired = now;
+                    g_target_obj = fp.snap->object;
+                    return;
+                }
+                auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_target_acquired).count();
+                if (waited < cfg::trigger::delay_ms) return;
+            }
+
+            // === FIRE ===
+            set_weapon_state(uyg_ptr, 1);
+            g_firing = true;
+            g_target_obj = fp.snap->object;
+            g_last_fire = now;
+            g_delay_pending = false;
+            return;
         }
 
+        // No target found
+        g_delay_pending = false;
+        g_target_obj = 0;
         if (was_firing)
             set_weapon_state(uyg_ptr, 0);
     }
