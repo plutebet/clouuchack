@@ -27,7 +27,6 @@ namespace triggerbot {
     inline constexpr float ZENIN_MIN_DIST    = 2.26e-5f;   // 0x37bd3586
     inline constexpr float ZENIN_SMALL_DIST  = 0.00997f;   // 0x3c234768
     inline constexpr float ZENIN_BONE_SCALE  = 100.0f;     // 0x42c80000
-    inline constexpr float ZENIN_STEP_FACTOR = 6.53e-5f;   // 0x38d1b717
 
     // --- Zenin trigger_result (output of aim_check, x19 in disasm) ---
     // Offsets: [0]=status, [4]=distance, [8]=weight_x, [C]=weight_y,
@@ -130,40 +129,22 @@ namespace triggerbot {
     //   0=miss, 1=direct_hit, 2=near, 3=adjusted, 4=close_miss
     inline trigger_result zenin_aim_check(
         const Vector3& local_pos, const Vector3& target_pos,
-        const matrix& view, float weight, float max_dist)
+        const matrix& view, float bone_radius_px, float max_dist)
     {
         trigger_result res{};
         res.status = 0;
         res.distance = 0.0f;
-        res.weight_x = weight;
-        res.weight_y = weight;
+        res.weight_x = bone_radius_px;
+        res.weight_y = bone_radius_px;
         res.confidence = 0.0f;
         res.adj_distance = 0.0f;
         res.iterations = 0;
 
-        // Zenin 0x2a6ebc: compute direction magnitude
         Vector3 dir = target_pos - local_pos;
-        float mag = std::sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
+        float dist = std::sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
+        if (dist <= ZENIN_MIN_DIST || !std::isfinite(dist)) return res;
 
-        // Zenin 0x2a6f04: check mag > ZENIN_MIN_DIST and isfinite
-        uint32_t mag_bits;
-        std::memcpy(&mag_bits, &mag, 4);
-        uint32_t abs_bits = mag_bits & 0x7FFFFFFF;
-        bool is_finite = abs_bits < 0x7F800000u;
-        if (!is_finite || mag <= ZENIN_MIN_DIST) return res;
-
-        // Zenin: validate distance param (s9) is a normal finite float
-        float dist_param = mag;
-        uint32_t dist_bits;
-        std::memcpy(&dist_bits, &dist_param, 4);
-        uint32_t dist_abs = dist_bits & 0x7FFFFFFF;
-        if (dist_bits < 0) { /* signed check from Zenin */ }
-        uint32_t exp_part = (dist_abs - 0x00800000u) >> 24;
-        if (exp_part > 126u) return res;
-        if ((dist_bits - 1u) > 0x7FFFFEu) return res;
-
-        // Zenin 0x2a6f60: normalize direction
-        float inv_dist = 1.0f / mag;
+        float inv_dist = 1.0f / dist;
         Vector3 norm_dir;
         norm_dir.x = dir.x * inv_dist;
         norm_dir.y = dir.y * inv_dist;
@@ -174,66 +155,35 @@ namespace triggerbot {
         if (fwd_len < ZENIN_MIN_DIST) return res;
         cam_fwd.x /= fwd_len; cam_fwd.y /= fwd_len; cam_fwd.z /= fwd_len;
 
-        // Dot product = cosine of angle between aim direction and target direction
         float dot = cam_fwd.x*norm_dir.x + cam_fwd.y*norm_dir.y + cam_fwd.z*norm_dir.z;
 
-        // Zenin: convert weight (bone_radius px) to angular threshold
-        // From 0x2a6f8c: s10 = s9 - s13 (distance - 0 initially)
-        float remaining = dist_param;
+        // Zenin angular threshold: bone_radius pixels → angle in radians
+        // At FOV 60° on 1080p, 1 pixel ≈ 0.056°. bone_radius=8px → ~0.45° → cos≈0.99997
+        // Zenin scales by distance: closer targets have larger angular size
+        float fov_rad = 1.0472f; // 60 deg default
+        float screen_h = 1080.0f;
+        float px_to_rad = fov_rad / screen_h;
+        float threshold_rad = bone_radius_px * px_to_rad;
+        float cos_threshold = std::cos(threshold_rad);
 
-        // Zenin: pixel-to-angle conversion using STEP_FACTOR
-        // threshold = weight * STEP_FACTOR (from 0x2a7098..0x2a70fc)
-        float angular_threshold = weight * ZENIN_STEP_FACTOR;
+        bool raycast_ok = zenin_raycast(local_pos, target_pos, dist, view);
 
-        // Zenin 0x2a6fa4: first raycast check
-        bool raycast_hit = zenin_raycast(local_pos, target_pos, remaining, view);
+        res.distance = dist;
+        res.adj_distance = dist;
 
-        if (raycast_hit) {
-            // Zenin 0x2a6fb4: raycast succeeded
-            // Compute how close aim is to target
-            float aim_error = 1.0f - dot;
-            if (aim_error < 0.0f) aim_error = 0.0f;
-
-            // Zenin: apply bone-type adjustment from lookup table
-            float bone_adjust = 0.0f;
-            if (aim_error <= angular_threshold) {
-                // Direct hit — status 1 or 2
-                res.status = 1;
-                res.distance = dist_param;
-                res.confidence = 1.0f;
-            } else if (aim_error <= angular_threshold * 2.0f) {
-                // Near hit — status 2
-                res.status = 2;
-                res.distance = dist_param;
-                res.confidence = 1.0f - (aim_error - angular_threshold) / angular_threshold;
-                if (res.confidence < 0.0f) res.confidence = 0.0f;
-                if (res.confidence > 1.0f) res.confidence = 1.0f;
-            } else {
-                // Miss but raycast hit something
-                res.status = 0;
-            }
+        if (dot >= cos_threshold) {
+            res.status = 1;
+            res.confidence = 1.0f;
+        } else if (dot >= std::cos(threshold_rad * 2.0f)) {
+            res.status = raycast_ok ? 2 : 0;
+            float t = (dot - std::cos(threshold_rad * 2.0f)) /
+                      (cos_threshold - std::cos(threshold_rad * 2.0f));
+            res.confidence = std::clamp(t, 0.0f, 1.0f);
         } else {
-            // Zenin 0x2a7078: raycast miss path
-            // Check if target is even roughly in front
-            if (dot > angular_threshold) {
-                // Close to aim but no raycast — status 2 (near)
-                res.status = 2;
-                res.distance = dist_param;
-                float aim_error = 1.0f - dot;
-                if (aim_error < 0.0f) aim_error = 0.0f;
-                res.confidence = 1.0f - aim_error / (angular_threshold * 2.0f);
-                if (res.confidence < 0.0f) res.confidence = 0.0f;
-                if (res.confidence > 1.0f) res.confidence = 1.0f;
-            }
+            res.status = 0;
         }
 
-        // Zenin 0x2a7128: iteration tracking (max 6)
         if (res.iterations < 6) res.iterations++;
-
-        // Zenin 0x2a72dc: final distance comparison loop control
-        res.adj_distance = remaining;
-        res.weight_y = weight - (res.status == 1 ? angular_threshold : 0.0f);
-
         return res;
     }
 
