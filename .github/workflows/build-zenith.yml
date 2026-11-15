@@ -22,8 +22,17 @@ jobs:
         cd unity6-bypass
         ${{ steps.ndk.outputs.ndk-path }}/ndk-build -j$(nproc) NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=jni/Android.mk NDK_APPLICATION_MK=jni/Application.mk
 
-    - name: Upload binary
+    - name: Upload binary as artifact
       uses: actions/upload-artifact@v4
       with:
         name: eeeww-arm64
         path: unity6-bypass/libs/arm64-v8a/eeeww
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: build-${{ github.sha }}
+        name: "Zenith build ${{ github.sha }}"
+        files: unity6-bypass/libs/arm64-v8a/eeeww
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
