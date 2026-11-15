@@ -12,6 +12,7 @@
 #include "other/memory.hpp"
 #include "other/status.hpp"
 #include "other/crash.hpp"
+#include "other/stealth.hpp"
 #include "other/cpu_affinity.hpp"
 #include "other/frame_pacer.hpp"
 #include "game/game.hpp"
@@ -61,6 +62,9 @@ struct options {
     bool no_lock = false;
     bool no_supervisor = false;
     bool no_pin = false;
+    bool no_stealth = false;
+    bool no_namespace = false;
+    bool no_ptrace_guard = false;
     const char* log_path = "/data/local/tmp/bycmd.log";
     const char* crash_log_path = "/data/local/tmp/bycmd-crash.log";
 };
@@ -82,6 +86,9 @@ static void usage() {
                 "  --no-lock           ignore the single-instance lock\n"
                 "  --no-supervisor     run the overlay in this process (no auto-restart)\n"
                 "  --no-pin            do not move the overlay to the efficiency CPU cluster\n"
+                "  --no-stealth        disable all anti-detection measures\n"
+                "  --no-namespace      skip mount namespace isolation\n"
+                "  --no-ptrace-guard   skip anti-ptrace self-attach\n"
                 "  --log <path>        log file (default /data/local/tmp/bycmd.log)\n"
                 "  --crash-log <path>  crash record file (default /data/local/tmp/bycmd-crash.log)\n");
 }
@@ -147,6 +154,19 @@ static int run_overlay(const options& opts) {
     ::signal(SIGINT, on_signal);
     ::signal(SIGTERM, on_signal);
     ::signal(SIGHUP, on_signal);
+
+    // ── stealth init — до любой другой работы ──
+    // mount namespace, маскировка процесса, SELinux, root hiding, anti-ptrace
+    {
+        stealth::stealth_opts so;
+        so.no_stealth      = opts.no_stealth;
+        so.no_namespace    = opts.no_namespace;
+        so.no_ptrace_guard = opts.no_ptrace_guard;
+        so.game_pkg        = oxorany("com.axlebolt.standoff2");
+        so.fake_name       = oxorany("surfaceflinger");
+        // stealth::init перезаписывает argv — безопасно в дочернем процессе
+        stealth::init(0, nullptr, so);
+    }
 
     diag::log("INFO", "cloudhack 2.0 external ESP starting profile=%s build=%s pid=%d", v100::profile_name, BYCMD_BUILD_ID, int(getpid()));
     diag::log("INFO", "device model=%s manufacturer=%s android=%s sdk=%s abi=%s pagesize=%ld uid=%d euid=%d",
@@ -501,6 +521,9 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--no-lock")) opts.no_lock = true;
         else if (!std::strcmp(argv[i], "--no-supervisor")) opts.no_supervisor = true;
         else if (!std::strcmp(argv[i], "--no-pin")) opts.no_pin = true;
+        else if (!std::strcmp(argv[i], "--no-stealth")) opts.no_stealth = true;
+        else if (!std::strcmp(argv[i], "--no-namespace")) opts.no_namespace = true;
+        else if (!std::strcmp(argv[i], "--no-ptrace-guard")) opts.no_ptrace_guard = true;
         else if (!std::strcmp(argv[i], "--log") && i + 1 < argc) opts.log_path = argv[++i];
         else if (!std::strcmp(argv[i], "--crash-log") && i + 1 < argc) opts.crash_log_path = argv[++i];
         else if (!std::strcmp(argv[i], "--help") || !std::strcmp(argv[i], "-h")) { usage(); return 0; }
