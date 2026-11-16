@@ -18,17 +18,4 @@ namespace esp {
     inline ImVec4 team_col = ImVec4(0.3f, 0.6f, 1.f, 1.f);
 }
 
-namespace trigger {
-    inline bool enabled = false;
-    inline float fov = 25.f;
-    inline int delay_ms = 0;
-    inline int interval_ms = 100;
-    inline float max_distance = 50.f;
-    inline bool visible_check = true;
-    inline bool draw_indicator = true;
-    inline float fire_x = 2380.f;
-    inline float fire_y = 750.f;
-    inline bool picking = false;
-}
-
 }

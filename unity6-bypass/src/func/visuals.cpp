@@ -6,7 +6,6 @@
 // ================================================================================
 
 #include "visuals.hpp"
-#include "triggerbot.hpp"
 #include "../game/game.hpp"
 #include "../game/math.hpp"
 #include "../game/player.hpp"
@@ -447,12 +446,6 @@ void visuals::draw() {
     g_camera = selected_camera;
     selected_kind_prev = selected_kind;
 
-    // ---- triggerbot tick (runs before ESP draw) ----
-    if (cfg::trigger::enabled && !Cameras.empty() && chain.main_bor) {
-        crash::stage("triggerbot");
-        triggerbot::tick(chain, s_frame, LocalTeam, ViewMatrix, ProjectionMatrix);
-    }
-    triggerbot::draw_indicator();
 
     // Matrix fallback: when all positioned enemies fail projection with the
     // current matrices (stale camera read at round transition), retry with

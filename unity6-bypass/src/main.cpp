@@ -15,7 +15,6 @@
 #include "other/stealth.hpp"
 #include "other/cpu_affinity.hpp"
 #include "other/frame_pacer.hpp"
-#include "other/touch_inject.hpp"
 #include "game/game.hpp"
 #include "game/camera.hpp"
 #include "func/visuals.hpp"
@@ -250,9 +249,6 @@ static int run_overlay(const options& opts) {
 
     if (!touch::init(max_size, min_size, (uint8_t)displayInfo.orientation))
         diag::log("WARN", "no touch device readable in /dev/input; menu cannot be operated");
-
-    if (!touch_inject::init((float)max_size, (float)min_size, (uint8_t)displayInfo.orientation))
-        diag::log("WARN", "touch inject init failed; triggerbot fire disabled");
 
     print_status(oxorany("Game detect ..."));
     if (!opts.no_launch && get_pid() <= 0) launch_standoff();

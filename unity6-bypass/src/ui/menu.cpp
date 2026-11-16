@@ -3,7 +3,7 @@
 //   left:  butterfly logo (tap = close the menu), "Visuals" tab,
 //          "Unload" (tap = unload at once through status::g_quit_request)
 //   right: Visuals - Box / Name / Health / Weapon / Smooth switches,
-//                    Box Style (Full / Corner), Color (HSV popup)
+//                    Color (HSV popup)
 // Opens centred on the auto-detected screen centre (ui::bar). Press on the
 // panel and move = drag; a control fires on release without moving.
 // Everything is drawn on the foreground draw list; no ImGui windows.
@@ -284,60 +284,6 @@ namespace ui::menu {
             return false;
         }
 
-        void triggerbot_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
-            const float pad = k_pad * k, row = k_row * k;
-            const float cw = amax.x - amin.x - pad * 2.f;
-            const float srow = row * 0.85f;
-            const float hdr = 36.f * k;
-            const float gap = 10.f * k;
-
-            ImVec2 c(amin.x + pad, amin.y + pad * 0.5f);
-
-            toggle_row(dl, "Enable", &cfg::trigger::enabled, c, cw, srow, a, k, live);
-            c.y += srow + gap;
-
-            // --- FOV ---
-            slider_row(dl, "FOV", &cfg::trigger::fov, 5.f, 80.f, c, cw, srow, a, k, live);
-            c.y += srow + gap * 1.5f;
-
-            // --- Timing ---
-            text_at(dl, c, hdr, c_text_dim, a, "Timing");
-            c.y += hdr;
-            {
-                float delay_f = (float)cfg::trigger::delay_ms;
-                slider_row(dl, "Delay", &delay_f, 0.f, 500.f, c, cw, srow, a, k, live);
-                cfg::trigger::delay_ms = (int)delay_f;
-            }
-            c.y += srow;
-            {
-                float interval_f = (float)cfg::trigger::interval_ms;
-                slider_row(dl, "Interval", &interval_f, 0.f, 500.f, c, cw, srow, a, k, live);
-                cfg::trigger::interval_ms = (int)interval_f;
-            }
-            c.y += srow + gap * 1.5f;
-
-            // --- Limits ---
-            text_at(dl, c, hdr, c_text_dim, a, "Limits");
-            c.y += hdr;
-            slider_row(dl, "Distance", &cfg::trigger::max_distance, 5.f, 100.f, c, cw, srow, a, k, live);
-            c.y += srow + gap * 1.5f;
-
-            // --- Checks ---
-            text_at(dl, c, hdr, c_text_dim, a, "Checks");
-            c.y += hdr;
-            toggle_row(dl, "Visible Check", &cfg::trigger::visible_check, c, cw, srow, a, k, live);
-            c.y += srow;
-            toggle_row(dl, "Draw Indicator", &cfg::trigger::draw_indicator, c, cw, srow, a, k, live);
-            c.y += srow + gap * 1.5f;
-
-            // --- Fire Button ---
-            text_at(dl, c, hdr, c_text_dim, a, "Fire Button");
-            c.y += hdr;
-            slider_row(dl, "Fire X", &cfg::trigger::fire_x, 0.f, g_sw, c, cw, srow, a, k, live);
-            c.y += srow;
-            slider_row(dl, "Fire Y", &cfg::trigger::fire_y, 0.f, g_sh, c, cw, srow, a, k, live);
-        }
-
         void visuals_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
             const float pad = k_pad * k, row = k_row * k;
             const float cw = amax.x - amin.x - pad * 2.f;
@@ -451,14 +397,12 @@ namespace ui::menu {
             g_color_open = false;
         }
 
-        static int g_tab = 0;
-        const char* tabs[] = {"Triggerbot", "Visuals", "Unload"};
-        const int tab_count = 3;
+        const char* tabs[] = {"Visuals", "Unload"};
+        const int tab_count = 2;
         for (int i = 0; i < tab_count; ++i) {
             const ImVec2 tmin(p.x, logo_max.y + k_tab_h * k * float(i)), tmax(p.x + sbw, tmin.y + k_tab_h * k);
             if (i == tab_count - 1 && live && tapped(tmin, tmax)) status::g_quit_request = true;
-            else if (i < tab_count - 1 && live && tapped(tmin, tmax)) g_tab = i;
-            const float sel = (i == g_tab && i < tab_count - 1) ? 1.f : (held(tmin, tmax) ? 1.f : 0.f);
+            const float sel = (i == 0) ? 1.f : (held(tmin, tmax) ? 1.f : 0.f);
             const float t = anim(std::string("tab_") + tabs[i], sel, 16.f);
             if (t > 0.01f) dl->AddRectFilled(tmin, tmax, col(c_tab_sel, a * t));
             ImFont* f = menu_font();
@@ -470,8 +414,7 @@ namespace ui::menu {
         // ---- content ----
         const ImVec2 amin(p.x + sbw, p.y), amax(pmax.x, pmax.y);
         dl->PushClipRect(amin, amax, true);
-        if (g_tab == 0) triggerbot_tab(dl, amin, amax, a, k, live);
-        else             visuals_tab(dl, amin, amax, a, k, live);
+        visuals_tab(dl, amin, amax, a, k, live);
         dl->PopClipRect();
 
         dl->PopClipRect();
