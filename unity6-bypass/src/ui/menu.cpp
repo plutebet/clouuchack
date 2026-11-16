@@ -289,7 +289,6 @@ namespace ui::menu {
             const float cw = amax.x - amin.x - pad * 2.f;
             const float srow = row * 0.85f;
             const float hdr = 36.f * k;
-            const float seg_h = 48.f * k;
             const float gap = 10.f * k;
 
             ImVec2 c(amin.x + pad, amin.y + pad * 0.5f);
@@ -297,14 +296,8 @@ namespace ui::menu {
             toggle_row(dl, "Enable", &cfg::trigger::enabled, c, cw, srow, a, k, live);
             c.y += srow + gap;
 
-            // --- Bones ---
-            text_at(dl, c, hdr, c_text_dim, a, "Bones");
-            c.y += hdr;
-            static const char* const bones[] = {"Head", "Upper", "Body", "Lower"};
-            segmented(dl, bones, 4, &cfg::trigger::bones, c, cw, seg_h, a, k, live);
-            c.y += seg_h + gap;
-
-            slider_row(dl, "Bone Radius", &cfg::trigger::bone_radius, 1.f, 30.f, c, cw, srow, a, k, live);
+            // --- FOV ---
+            slider_row(dl, "FOV", &cfg::trigger::fov, 5.f, 80.f, c, cw, srow, a, k, live);
             c.y += srow + gap * 1.5f;
 
             // --- Timing ---
@@ -334,11 +327,7 @@ namespace ui::menu {
             c.y += hdr;
             toggle_row(dl, "Visible Check", &cfg::trigger::visible_check, c, cw, srow, a, k, live);
             c.y += srow;
-            toggle_row(dl, "Scoped Only", &cfg::trigger::scoped_only, c, cw, srow, a, k, live);
-            c.y += srow;
-            toggle_row(dl, "Auto Wall", &cfg::trigger::auto_wall, c, cw, srow, a, k, live);
-            c.y += srow;
-            toggle_row(dl, "Spread Pred.", &cfg::trigger::spread_prediction, c, cw, srow, a, k, live);
+            toggle_row(dl, "Draw Indicator", &cfg::trigger::draw_indicator, c, cw, srow, a, k, live);
             c.y += srow + gap * 1.5f;
 
             // --- Fire Button ---
@@ -365,11 +354,6 @@ namespace ui::menu {
                 toggle_row(dl, it.name, it.value, c, cw, row, a, k, live);
                 c.y += row;
             }
-            text_at(dl, c, 48.f * k, c_text, a, "Box Style");
-            c.y += 48.f * k;
-            static const char* const styles[] = {"Full", "Corner", "Clean"};
-            segmented(dl, styles, 3, &cfg::esp::box_type, c, cw, 58.f * k, a, k, live);
-            c.y += 58.f * k + 12.f * k;
             const float color_y = c.y;
             color_row(dl, "Color", &cfg::esp::box_col, c, cw, row, a, k, live);
             color_popup(dl, &cfg::esp::box_col, amin, amax, color_y, a, k);
