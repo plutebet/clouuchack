@@ -330,12 +330,12 @@ static int run_overlay(const options& opts) {
             if (esp_allowed) {
                 // Library health is independent from asynchronous registry discovery.
                 game::check_lib(proc::lib);
-                crash::stage("esp");
+                crash::stage("render");
                 visuals::draw();
             } else if (run && proc::build_checked && !proc::build_ok) {
                 static long long mismatch_log = 0;
                 if (diag::every(mismatch_log, 10000))
-                    diag::log("ERROR", "ESP disabled: libunity build mismatch (%s). Use --skip-build-check only for diagnostics.", proc::build_id);
+                    diag::log("ERROR", "disabled: libunity build mismatch (%s). Use --skip-build-check only for diagnostics.", proc::build_id);
             }
         }
 

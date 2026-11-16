@@ -32,7 +32,7 @@ extern ImTextureID g_weapon_atlas_tex;
 
 static void esp_wait(const char* stage) {
     static long long last = 0;
-    if (diag::every(last, 5000)) diag::log("WAIT", "ESP blocked at: %s", stage);
+    if (diag::every(last, 5000)) diag::log("WAIT", "blocked at: %s", stage);
 }
 
 namespace {
@@ -107,7 +107,7 @@ void visuals::draw() {
     bool any = cfg::esp::box || cfg::esp::name || cfg::esp::health || cfg::esp::weapon;
     if (!any) { esp_wait("all ESP options disabled"); return; }
 
-    crash::stage("esp-players");
+    crash::stage("render-p");
     const long long now_ms = diag::now_ms();
     const long long now_us = diag::now_us();
     // The registry walk (list, items, one 0x98 block per NetObject) runs at
@@ -192,7 +192,7 @@ void visuals::draw() {
     // and HP in one batched read, then the camera again: if it changed in
     // between, the game rendered a frame while we were reading and the poses
     // are re-read so that box and camera describe the same frame.
-    crash::stage("esp-camera");
+    crash::stage("render-cam");
     cam::main_chain chain{};
     std::vector<camera_candidate> Cameras = cam::resolve(LocalPlayer, chain);
     if (Cameras.empty()) { g_camera = 0; esp_wait("camera resolution (controller / bor / transform)"); return; }
@@ -220,7 +220,7 @@ void visuals::draw() {
             if (reacquiring || starting) {
                 static long long hold_log = 0;
                 if (diag::every(hold_log, 1000))
-                    diag::log("CAMERA", "%s: ESP hidden until the native camera is locked (best fallback=%s, %lld ms)",
+                    diag::log("CAMERA", "%s: hidden until native camera locked (best fallback=%s, %lld ms)",
                               reacquiring ? "native camera lost" : "round start",
                               camera_kind_name(Cameras.front().kind),
                               reacquiring ? now_ms - last_native_ms : now_ms - round_start_ms);
@@ -231,7 +231,7 @@ void visuals::draw() {
         }
     }
 
-    crash::stage("esp-poses");
+    crash::stage("render-t");
     static std::vector<player::frame_player> s_frame;
     static player::frame_batch s_batch;
     s_frame.clear();
@@ -478,7 +478,7 @@ void visuals::draw() {
         }
     }
 
-    crash::stage("esp-draw");
+    crash::stage("render-draw");
     struct draw_item { ImVec2 min, max; float cx; const enemy_frame* e; };
     std::vector<draw_item> items;
     items.reserve(frame_enemies.size());
@@ -546,7 +546,7 @@ void visuals::draw() {
     static long long frame_log = 0;
     if (diag::every(frame_log, 5000)) {
         diag::log(projected || !has_targets ? "INFO" : "WARN",
-                  "ESP frame players=%zu local=0x%llx team=%d pos=(%.2f %.2f %.2f) enemies=%d alive=%d positioned=%d projected=%d camera=0x%llx kind=%s",
+                  "frame players=%zu local=0x%llx team=%d pos=(%.2f %.2f %.2f) enemies=%d alive=%d positioned=%d projected=%d camera=0x%llx kind=%s",
                   Players.size(), (unsigned long long)LocalPlayer, LocalTeam,
                   LocalPosition.x, LocalPosition.y, LocalPosition.z, enemies, alive, positioned,
                   projected, (unsigned long long)g_camera, camera_kind_name(selected_kind));
