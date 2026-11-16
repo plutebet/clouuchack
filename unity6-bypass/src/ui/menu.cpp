@@ -1,5 +1,5 @@
 // ================================================================================
-// cloudhack menu: sidebar layout.
+// menu: sidebar layout.
 //   left:  butterfly logo (tap = close the menu), "Visuals" tab,
 //          "Unload" (tap = unload at once through status::g_quit_request)
 //   right: Visuals - Box / Name / Health / Weapon / Smooth switches,

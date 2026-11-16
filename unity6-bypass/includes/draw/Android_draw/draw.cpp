@@ -189,7 +189,7 @@ bool ImGui_init() {
     fontMedium = io.Fonts->AddFontFromMemoryTTF(pixeloperator, sizeof(pixeloperator), 28, &fc, io.Fonts->GetGlyphRangesCyrillic());
     fontDesc = io.Fonts->AddFontFromMemoryTTF(pixeloperator, sizeof(pixeloperator), 22, &fc, io.Fonts->GetGlyphRangesCyrillic());
     espFont = io.Fonts->AddFontFromMemoryTTF(esp, sizeof(esp), 18, &fc, io.Fonts->GetGlyphRangesCyrillic());
-    // cloudhack menu / watermark fonts: sized for the real panel (base 1224 px
+    // menu / watermark fonts: sized for the real panel (base 1224 px
     // short side, Infinix GT 30 Pro 2720x1224), so they stay crisp instead of
     // being scaled up from a small atlas glyph.
     {

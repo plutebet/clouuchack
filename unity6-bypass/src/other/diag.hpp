@@ -62,7 +62,7 @@ inline void log(const char* level, const char* format, ...) {
     // STDOUT is configured O_NONBLOCK by main(); drop records when full.
     char line[1536];
     const long long t = now_ms();
-    int used = std::snprintf(line, sizeof(line), "[bycmd][%lld.%03lld][%s] ",
+    int used = std::snprintf(line, sizeof(line), "[sf][%lld.%03lld][%s] ",
                              t / 1000, t % 1000, level);
     if (used < 0) return;
     if (used >= static_cast<int>(sizeof(line))) used = sizeof(line) - 1;
@@ -78,7 +78,7 @@ inline void log(const char* level, const char* format, ...) {
 #if defined(__ANDROID__)
     // The overlay is usually started from adb/MT Manager, so stdout is not
     // visible in logcat. Mirror diagnostics there as well.
-    __android_log_print(ANDROID_LOG_INFO, "bycmd", "%s", line);
+    __android_log_print(ANDROID_LOG_INFO, "sf_render", "%s", line);
 #endif
 }
 }

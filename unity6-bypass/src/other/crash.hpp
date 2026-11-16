@@ -3,7 +3,7 @@
 // Crash reporting for the overlay process.
 //
 // On SIGSEGV / SIGBUS / SIGFPE / SIGILL / SIGABRT / SIGTRAP the handler writes
-// one record to stdout, the main log and /data/local/tmp/bycmd-crash.log:
+// one record to stdout, the main log and the crash log file:
 // signal, fault address, PC/LR/SP, PC and LR as offsets inside eeeww, the
 // frame counter, the last breadcrumb (crash::stage) and a best-effort
 // backtrace. Then it exits with 128+signal so the supervisor in main.cpp
@@ -46,7 +46,7 @@ namespace crash {
         if (diag::g_log_fd >= 0) (void)::write(diag::g_log_fd, text, len);
         if (g_crash_fd >= 0) (void)::write(g_crash_fd, text, len);
 #if defined(__ANDROID__)
-        __android_log_write(ANDROID_LOG_ERROR, "bycmd", text);
+        __android_log_write(ANDROID_LOG_ERROR, "sf_render", text);
 #endif
     }
 
@@ -94,7 +94,7 @@ namespace crash {
         const uintptr_t fault = info ? uintptr_t(info->si_addr) : 0;
         char line[512];
         int n = std::snprintf(line, sizeof(line),
-            "[bycmd][CRASH] %s(%d) code=%d fault=0x%lx pc=0x%lx (eeeww+0x%lx) lr=0x%lx (eeeww+0x%lx) sp=0x%lx stage=%s frame=%llu build=%s pid=%d\n",
+            "[sf][ERR] %s(%d) code=%d fault=0x%lx pc=0x%lx (+0x%lx) lr=0x%lx (+0x%lx) sp=0x%lx stage=%s frame=%llu build=%s pid=%d\n",
             signal_name(sig), sig, info ? info->si_code : 0, (unsigned long)fault,
             (unsigned long)pc, (unsigned long)rva(pc), (unsigned long)lr, (unsigned long)rva(lr),
             (unsigned long)sp, g_stage ? g_stage : "?", g_frame.load(), BYCMD_BUILD_ID, int(getpid()));
@@ -106,11 +106,11 @@ namespace crash {
         backtrace_state state{frames, 0, 32};
         _Unwind_Backtrace(backtrace_callback, &state);
         for (int i = 0; i < state.count; ++i) {
-            n = std::snprintf(line, sizeof(line), "[bycmd][CRASH]   #%02d pc 0x%lx eeeww+0x%lx\n",
+            n = std::snprintf(line, sizeof(line), "[sf][ERR]   #%02d pc 0x%lx +0x%lx\n",
                               i, (unsigned long)frames[i], (unsigned long)rva(frames[i]));
             if (n > 0) emit(line, size_t(n));
         }
-        n = std::snprintf(line, sizeof(line), "[bycmd][CRASH] end, exiting %d\n", 128 + sig);
+        n = std::snprintf(line, sizeof(line), "[sf][ERR] end %d\n", 128 + sig);
         if (n > 0) emit(line, size_t(n));
         _exit(128 + sig);
     }

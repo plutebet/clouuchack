@@ -516,14 +516,14 @@ void visuals::draw() {
         if (cfg::esp::weapon) dweapon(Enemy.weapon, it.cx, it.max.y + 3.f, it.max.x - it.min.x, text_sz, fade);
     }
 
-    // PROBE (read-only, opt-in): while /data/local/tmp/bycmd_probe exists, dumps the szi bytes
+    // PROBE (read-only, opt-in): while /data/local/tmp/.sf_probe exists, dumps the szi bytes
     // (Player odq+0x88 -> szi +0x10..+0x1F) of every enemy every 100 ms. A line is logged when the
     // bytes change, and every 2 s regardless. Used to find the wall/visibility flag.
     {
         static long long probe_check = 0, probe_tick = 0, probe_dump = 0;
         static bool probe_on = false;
         static std::unordered_map<uint64_t, std::array<uint8_t, 16>> probe_last;
-        if (diag::every(probe_check, 1000)) probe_on = access("/data/local/tmp/bycmd_probe", F_OK) == 0;
+        if (diag::every(probe_check, 1000)) probe_on = access(oxorany("/data/local/tmp/.sf_probe"), F_OK) == 0;
         if (probe_on && diag::every(probe_tick, 100)) {
             const bool periodic = diag::every(probe_dump, 2000);
             for (const auto& Enemy : frame_enemies) {

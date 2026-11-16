@@ -65,8 +65,8 @@ struct options {
     bool no_stealth = false;
     bool no_namespace = false;
     bool no_ptrace_guard = false;
-    const char* log_path = "/data/local/tmp/bycmd.log";
-    const char* crash_log_path = "/data/local/tmp/bycmd-crash.log";
+    const char* log_path = "/data/local/tmp/.sf_render.log";
+    const char* crash_log_path = "/data/local/tmp/.sf_render_err.log";
 };
 
 // Shared between supervisor and overlay child (MAP_SHARED anonymous page).
@@ -79,18 +79,10 @@ struct heartbeat {
 static heartbeat* g_hb = nullptr;
 
 static void usage() {
-    std::printf("cloudhack 2.0 external ESP\n"
-                "  --diag              probe overlay/EGL/process and exit\n"
-                "  --no-launch         do not start the game package\n"
-                "  --skip-build-check  run even if libunity build-id does not match the profile\n"
-                "  --no-lock           ignore the single-instance lock\n"
-                "  --no-supervisor     run the overlay in this process (no auto-restart)\n"
-                "  --no-pin            do not move the overlay to the efficiency CPU cluster\n"
-                "  --no-stealth        disable all anti-detection measures\n"
-                "  --no-namespace      skip mount namespace isolation\n"
-                "  --no-ptrace-guard   skip anti-ptrace self-attach\n"
-                "  --log <path>        log file (default /data/local/tmp/bycmd.log)\n"
-                "  --crash-log <path>  crash record file (default /data/local/tmp/bycmd-crash.log)\n");
+    std::printf("sf_render\n"
+                "  --diag --no-launch --skip-build-check --no-lock\n"
+                "  --no-supervisor --no-pin --no-stealth --no-namespace\n"
+                "  --no-ptrace-guard --log <path> --crash-log <path>\n");
 }
 
 static std::string sys_prop(const char* name) {
@@ -107,7 +99,11 @@ static void launch_standoff() {
 
 static int acquire_lock(const options& opts) {
     if (opts.no_lock) return -1;
-    const char* paths[] = {"/data/local/tmp/bycmd.lock", "./bycmd.lock", "/data/local/tmp/.bycmd.lock"};
+    const char* paths[] = {
+        oxorany("/data/local/tmp/.sf_render.lock"),
+        oxorany("./.sf_render.lock"),
+        oxorany("/data/local/tmp/.sf_cache.lock"),
+    };
     for (const char* path : paths) {
         const int fd = ::open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
         if (fd < 0) {
@@ -115,7 +111,7 @@ static int acquire_lock(const options& opts) {
             continue;
         }
         if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
-            diag::log("ERROR", "another bycmd instance already owns %s; refusing duplicate menu", path);
+            diag::log("ERROR", "another instance already owns %s", path);
             ::close(fd);
             return -2;
         }
@@ -127,7 +123,7 @@ static int acquire_lock(const options& opts) {
 }
 
 // ImGui assertion hook (imconfig.h): log instead of silently continuing.
-void bycmd_imgui_assert_fail(const char* expr, const char* file, int line) {
+void sf_imgui_assert_fail(const char* expr, const char* file, int line) {
     static long long last = 0;
     static unsigned count = 0;
     ++count;
@@ -168,7 +164,7 @@ static int run_overlay(const options& opts) {
         stealth::init(0, nullptr, so);
     }
 
-    diag::log("INFO", "cloudhack 2.0 external ESP starting profile=%s build=%s pid=%d", v100::profile_name, BYCMD_BUILD_ID, int(getpid()));
+    diag::log("INFO", "starting profile=%s build=%s pid=%d", v100::profile_name, BYCMD_BUILD_ID, int(getpid()));
     diag::log("INFO", "device model=%s manufacturer=%s android=%s sdk=%s abi=%s pagesize=%ld uid=%d euid=%d",
               sys_prop("ro.product.model").c_str(), sys_prop("ro.product.manufacturer").c_str(),
               sys_prop("ro.build.version.release").c_str(), sys_prop("ro.build.version.sdk").c_str(),
@@ -535,7 +531,7 @@ int main(int argc, char** argv) {
     if (stdout_flags >= 0) ::fcntl(STDOUT_FILENO, F_SETFL, stdout_flags | O_NONBLOCK);
     // The log is truncated once here; overlay children append to it, so a
     // crash record and the restart that follows are in the same file.
-    if (!diag::open_log(opts.log_path, true) && !diag::open_log("./bycmd.log", true))
+    if (!diag::open_log(opts.log_path, true) && !diag::open_log("./.sf_render.log", true))
         diag::log("WARN", "log file unavailable (%s), stdout/logcat only", opts.log_path);
     else
         diag::log("INFO", "log file %s", diag::g_log_path);

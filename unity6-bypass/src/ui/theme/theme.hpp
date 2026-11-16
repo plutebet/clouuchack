@@ -1,5 +1,5 @@
 // ================================================================================
-// cloudhack theme: dark red-black panel, red accent, light text.
+// theme: dark red-black panel, red accent, light text.
 // All menu geometry is expressed in "base pixels" for a 1224 px tall landscape
 // screen (Infinix GT 30 Pro, 2720x1224) and multiplied by style::k() at draw
 // time, so the same layout keeps its physical size on other panels.
@@ -43,7 +43,7 @@ namespace style {
     inline float content_alpha = 1.f;
     inline bool popup_open = false;
     inline std::string active_popup = "";
-    inline constexpr float S = 2.5f;   // legacy widgets.cpp scale, unused by the cloudhack menu
+    inline constexpr float S = 2.5f;
 
     // Base layout height is 1224 px (Infinix GT 30 Pro). g_sh is the short
     // side of the display in landscape, set by main() before the first frame.
