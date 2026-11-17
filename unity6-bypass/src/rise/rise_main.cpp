@@ -10,6 +10,7 @@
 #include "../other/frame_pacer.hpp"
 #include "rise_game.hpp"
 #include "rise_visuals.hpp"
+#include "rise_anticheat.hpp"
 #include "../protect/oxorany.hpp"
 #include <cstdio>
 #include <cstring>
@@ -131,6 +132,7 @@ static int run_overlay(const options& opts) {
         stealth::init(0, nullptr, so);
     }
 
+    rise_ac::block_ac_network();
     diag::log("INFO", "starting profile=%s pid=%d", rise::profile_name, int(getpid()));
     diag::log("INFO", "device model=%s android=%s sdk=%s abi=%s",
               sys_prop("ro.product.model").c_str(),
@@ -237,6 +239,7 @@ static int run_overlay(const options& opts) {
             prev = false;
             game_started = false;
             rise_game::reset();
+            rise_ac::reset();
         }
 
         if (is_landscape) {
@@ -262,6 +265,8 @@ static int run_overlay(const options& opts) {
                     rise_game::g_pid = proc::pid;
                 }
                 game::check_lib(proc::lib);
+                crash::stage("anticheat");
+                rise_ac::tick();
                 crash::stage("render");
                 rise_visuals::draw();
             }
