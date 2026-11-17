@@ -3,6 +3,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cmath>
+#include <algorithm>
 #include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -15,9 +16,9 @@ namespace inject {
 inline int g_fd = -1;
 inline input_absinfo g_abs_x{};
 inline input_absinfo g_abs_y{};
-inline uint8_t g_orientation = 0;
-inline float g_mul_x = 1.f;
-inline float g_mul_y = 1.f;
+inline int g_screen_w = 0;
+inline int g_screen_h = 0;
+inline bool g_device_portrait = false;
 inline int g_tracking_id = 10000;
 
 inline void write_ev(uint16_t type, uint16_t code, int32_t value) {
@@ -29,34 +30,30 @@ inline void write_ev(uint16_t type, uint16_t code, int32_t value) {
 }
 
 inline void screen_to_device(float sx, float sy, int32_t& dx, int32_t& dy) {
-    float raw_x = sx / g_mul_x;
-    float raw_y = sy / g_mul_y;
-    switch (g_orientation) {
-        case 1:
-            dx = g_abs_x.maximum - static_cast<int32_t>(raw_y);
-            dy = static_cast<int32_t>(raw_x);
-            break;
-        case 2:
-            dx = g_abs_x.maximum - static_cast<int32_t>(raw_x);
-            dy = g_abs_y.maximum - static_cast<int32_t>(raw_y);
-            break;
-        case 3:
-            dx = static_cast<int32_t>(raw_y);
-            dy = g_abs_y.maximum - static_cast<int32_t>(raw_x);
-            break;
-        default:
-            dx = static_cast<int32_t>(raw_x);
-            dy = static_cast<int32_t>(raw_y);
-            break;
+    // Overlay is ALWAYS landscape (screen_w > screen_h = 2720x1224).
+    // Touch device coordinates are in native (physical) orientation.
+    // On a portrait-native device (abs_y > abs_x), we must rotate:
+    //   overlay X (long edge) → device Y (long axis)
+    //   overlay Y (short edge) → device X (short axis), inverted
+    if (g_device_portrait) {
+        float scale_long  = static_cast<float>(g_abs_y.maximum) / static_cast<float>(g_screen_w);
+        float scale_short = static_cast<float>(g_abs_x.maximum) / static_cast<float>(g_screen_h);
+        dy = static_cast<int32_t>(sx * scale_long);
+        dx = g_abs_x.maximum - static_cast<int32_t>(sy * scale_short);
+    } else {
+        float scale_x = static_cast<float>(g_abs_x.maximum) / static_cast<float>(g_screen_w);
+        float scale_y = static_cast<float>(g_abs_y.maximum) / static_cast<float>(g_screen_h);
+        dx = static_cast<int32_t>(sx * scale_x);
+        dy = static_cast<int32_t>(sy * scale_y);
     }
-    if (dx < g_abs_x.minimum) dx = g_abs_x.minimum;
-    if (dx > g_abs_x.maximum) dx = g_abs_x.maximum;
-    if (dy < g_abs_y.minimum) dy = g_abs_y.minimum;
-    if (dy > g_abs_y.maximum) dy = g_abs_y.maximum;
+    dx = std::clamp(dx, g_abs_x.minimum, g_abs_x.maximum);
+    dy = std::clamp(dy, g_abs_y.minimum, g_abs_y.maximum);
 }
 
 inline bool init(int screen_w, int screen_h, uint8_t orientation) {
-    g_orientation = orientation;
+    (void)orientation;
+    g_screen_w = screen_w;
+    g_screen_h = screen_h;
 
     const char* path = "/dev/input/";
     auto dir = opendir(path);
@@ -82,15 +79,11 @@ inline bool init(int screen_w, int screen_h, uint8_t orientation) {
         g_fd = fd;
         g_abs_x = abs_x;
         g_abs_y = abs_y;
+        g_device_portrait = abs_y.maximum > abs_x.maximum;
 
-        float mx = std::fmax(static_cast<float>(abs_x.maximum), static_cast<float>(abs_y.maximum));
-        float mn = std::fmin(static_cast<float>(abs_x.maximum), static_cast<float>(abs_y.maximum));
-        g_mul_x = static_cast<float>(screen_w) / (screen_w > screen_h ? mx : mn);
-        g_mul_y = static_cast<float>(screen_h) / (screen_w > screen_h ? mn : mx);
-
-        diag::log("INJECT", "device=%s absX=[%d..%d] absY=[%d..%d] mul=%.4f,%.4f orient=%d",
+        diag::log("INJECT", "device=%s absX=[%d..%d] absY=[%d..%d] portrait=%d sw=%d sh=%d",
                   ev_path, abs_x.minimum, abs_x.maximum, abs_y.minimum, abs_y.maximum,
-                  g_mul_x, g_mul_y, int(orientation));
+                  int(g_device_portrait), screen_w, screen_h);
 
         closedir(dir);
         return true;
@@ -106,7 +99,7 @@ inline void tap_down(float sx, float sy) {
     if (++g_tracking_id > 60000) g_tracking_id = 10000;
 
     static int log_count = 0;
-    if (log_count < 5) {
+    if (log_count < 10) {
         ++log_count;
         diag::log("INJECT", "tap screen=(%.0f,%.0f) device=(%d,%d) tid=%d",
                   sx, sy, dx, dy, g_tracking_id);
