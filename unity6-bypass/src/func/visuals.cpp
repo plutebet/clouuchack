@@ -6,6 +6,8 @@
 // ================================================================================
 
 #include "visuals.hpp"
+#include "aim.hpp"
+#include "aim_targets.hpp"
 #include "../game/game.hpp"
 #include "../game/math.hpp"
 #include "../game/player.hpp"
@@ -185,6 +187,7 @@ void visuals::draw() {
             last_local = LocalPlayer;
         }
     }
+    aim_targets::set_local(LocalPlayer);
     const int LocalTeam = Local->team;
     if (LocalTeam != 1 && LocalTeam != 2) { esp_wait("local team validation"); return; }
 
@@ -515,6 +518,24 @@ void visuals::draw() {
         }
         if (cfg::esp::weapon) dweapon(Enemy.weapon, it.cx, it.max.y + 3.f, it.max.x - it.min.x, text_sz, fade);
     }
+
+    {
+        std::vector<aim_targets::Target> aim_tgts;
+        aim_tgts.reserve(frame_enemies.size());
+        for (const auto& e : frame_enemies) {
+            ImVec2 sh;
+            if (!world_to_screen(e.head, ViewMatrix, ProjectionMatrix, sh)) continue;
+            aim_targets::Target t;
+            t.x = sh.x; t.y = sh.y;
+            t.distance = e.distance;
+            t.hp = float(e.hp); t.max_hp = float(e.max_hp);
+            t.object = e.object;
+            t.wx = e.head.x; t.wy = e.head.y; t.wz = e.head.z;
+            aim_tgts.push_back(t);
+        }
+        aim_targets::publish(aim_tgts);
+    }
+    aim::tick();
 
     // PROBE (read-only, opt-in): while /data/local/tmp/.sf_probe exists, dumps the szi bytes
     // (Player odq+0x88 -> szi +0x10..+0x1F) of every enemy every 100 ms. A line is logged when the

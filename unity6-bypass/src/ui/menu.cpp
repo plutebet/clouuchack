@@ -20,6 +20,7 @@
 #include "Android_draw/draw.h"
 #include "fonts/menu/butterfly.h"
 #include "../other/status.hpp"
+#include "../func/aim.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cfloat>
@@ -306,6 +307,70 @@ namespace ui::menu {
             color_popup(dl, &cfg::esp::box_col, amin, amax, color_y, a, k);
         }
 
+        bool int_slider_row(ImDrawList* dl, const char* label, int* v, int mn, int mx,
+                            const ImVec2& pos, float w, float h, float a, float k, bool live) {
+            text_at(dl, pos, h, c_text, a, label);
+            const float sw = 200.f * k, sh = 8.f * k;
+            const float tx = pos.x + w - sw;
+            const float ty = pos.y + (h - sh) * 0.5f;
+            const ImVec2 tmin(tx, ty - 12.f * k), tmax(tx + sw, ty + sh + 12.f * k);
+            dl->AddRectFilled(ImVec2(tx, ty), ImVec2(tx + sw, ty + sh), col(c_widget, a), sh * 0.5f);
+            const float pct = float(*v - mn) / float(mx - mn);
+            dl->AddRectFilled(ImVec2(tx, ty), ImVec2(tx + sw * pct, ty + sh), col(c_green, a), sh * 0.5f);
+            const float kx = tx + sw * pct, ky = ty + sh * 0.5f;
+            dl->AddCircleFilled(ImVec2(kx, ky), 12.f * k, col(c_green, a), 20);
+            dl->AddCircleFilled(ImVec2(kx, ky), 8.f * k, col(c_white, a), 20);
+            ImFont* f = menu_font();
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%d", *v);
+            const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.f, buf);
+            dl->AddText(f, f->FontSize, ImVec2(tx + sw + 10.f * k, pos.y + (h - ts.y) * 0.5f), col(c_text, a), buf);
+            static std::string s_drag_id;
+            ImGuiIO& io = ImGui::GetIO();
+            std::string sid = std::string("isl_") + label;
+            if (live && !g_color_open) {
+                if (ImGui::IsMouseClicked(0) && inside(io.MousePos, tmin, tmax))
+                    s_drag_id = sid;
+                if (s_drag_id == sid && io.MouseDown[0]) {
+                    float t = (io.MousePos.x - tx) / sw;
+                    *v = mn + int(std::clamp(t, 0.f, 1.f) * float(mx - mn) + 0.5f);
+                }
+                if (!io.MouseDown[0] && s_drag_id == sid) s_drag_id.clear();
+            }
+            return false;
+        }
+
+        void aim_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
+            const float pad = k_pad * k, row = k_row * k;
+            const float cw = amax.x - amin.x - pad * 2.f;
+            ImVec2 c(amin.x + pad, amin.y + pad * 0.5f);
+
+            toggle_row(dl, "Enabled", &cfg::aim::enabled, c, cw, row, a, k, live);
+            c.y += row;
+
+            int_slider_row(dl, "FOV", &cfg::aim::fov_deg, 1, 90, c, cw, row, a, k, live);
+            c.y += row;
+
+            int_slider_row(dl, "Smooth", &cfg::aim::smooth, 1, 50, c, cw, row, a, k, live);
+            c.y += row;
+
+            const char* prio_names[] = {"Angle", "Distance", "HP"};
+            segmented(dl, prio_names, 3, &cfg::aim::priority, c, cw, 48.f * k, a, k, live);
+            c.y += 48.f * k + 16.f * k;
+
+            toggle_row(dl, "Lock Target", &cfg::aim::lock_target, c, cw, row, a, k, live);
+            c.y += row;
+
+            toggle_row(dl, "Back Camera", &cfg::aim::back_camera, c, cw, row, a, k, live);
+            c.y += row;
+
+            const char* st = aim::state_text();
+            if (st && st[0]) {
+                ImFont* f = menu_font();
+                dl->AddText(f, f->FontSize, ImVec2(c.x, c.y + (row - f->FontSize) * 0.5f), col(c_text_dim, a), st);
+            }
+        }
+
     }
 
     void render() {
@@ -398,8 +463,8 @@ namespace ui::menu {
             g_color_open = false;
         }
 
-        const char* tabs[] = {"Visuals", "Unload"};
-        const int tab_count = 2;
+        const char* tabs[] = {"Visuals", "Aim", "Unload"};
+        const int tab_count = 3;
         for (int i = 0; i < tab_count; ++i) {
             const ImVec2 tmin(p.x, logo_max.y + k_tab_h * k * float(i)), tmax(p.x + sbw, tmin.y + k_tab_h * k);
             if (i == tab_count - 1 && live && tapped(tmin, tmax)) status::g_quit_request = true;
@@ -416,7 +481,8 @@ namespace ui::menu {
         // ---- content ----
         const ImVec2 amin(p.x + sbw, p.y), amax(pmax.x, pmax.y);
         dl->PushClipRect(amin, amax, true);
-        visuals_tab(dl, amin, amax, a, k, live);
+        if (g_tab == 0) visuals_tab(dl, amin, amax, a, k, live);
+        else if (g_tab == 1) aim_tab(dl, amin, amax, a, k, live);
         dl->PopClipRect();
 
         dl->PopClipRect();

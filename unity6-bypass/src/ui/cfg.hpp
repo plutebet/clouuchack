@@ -18,4 +18,13 @@ namespace esp {
     inline ImVec4 team_col = ImVec4(0.3f, 0.6f, 1.f, 1.f);
 }
 
+namespace aim {
+    inline bool enabled = false;
+    inline int fov_deg = 15;
+    inline int smooth = 15;
+    inline int priority = 0;
+    inline bool lock_target = true;
+    inline bool back_camera = false;
+}
+
 }
