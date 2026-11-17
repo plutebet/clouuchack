@@ -482,6 +482,7 @@ inline uint64_t get_lib() {
     struct Segment {
         uint64_t begin, end, file_offset;
         bool named_unity;
+        bool executable;
     };
     std::vector<Segment> segments;
     char line[1024];
@@ -496,6 +497,7 @@ inline uint64_t get_lib() {
                             #else
                             std::strstr(line, "libunity.so") != nullptr
                             #endif
+                            , perms[2] == 'x'
                             });
     }
     std::fclose(file);
@@ -524,14 +526,22 @@ inline uint64_t get_lib() {
             return base;
         }
     }
-    for (const Segment& segment : segments) {
-        if (!segment.named_unity) continue;
-        for (uint64_t base : {segment.begin, segment.begin >= segment.file_offset
-                                   ? segment.begin - segment.file_offset : segment.begin}) {
-            if (elf_is_aarch64(base)) {
-                diag::log("WARN", "libunity.so load bias=0x%llx (pathname fallback, no SONAME)",
-                          (unsigned long long)base);
-                return base;
+    // Pathname fallback: prefer r-xp (executable, actual linker load) over
+    // r--p (raw file mapping) to avoid reading uninitialized metadata tokens
+    // from the APK file mapping instead of runtime-initialized .bss/.data.
+    for (int pass = 0; pass < 2; pass++) {
+        for (const Segment& segment : segments) {
+            if (!segment.named_unity) continue;
+            if (pass == 0 && !segment.executable) continue;
+            for (uint64_t base : {segment.begin, segment.begin >= segment.file_offset
+                                       ? segment.begin - segment.file_offset : segment.begin}) {
+                if (elf_is_aarch64(base)) {
+                    diag::log(pass == 0 ? "INFO" : "WARN",
+                              "libunity.so load bias=0x%llx (pathname %s, no SONAME)",
+                              (unsigned long long)base,
+                              pass == 0 ? "r-xp preferred" : "fallback");
+                    return base;
+                }
             }
         }
     }
