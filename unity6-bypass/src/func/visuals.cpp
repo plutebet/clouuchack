@@ -544,7 +544,7 @@ void visuals::draw() {
                     ImVec2(cfg::trigger::fire_x, cfg::trigger::fire_y + 6.f), IM_COL32(255, 60, 60, 160), 1.5f);
     }
 
-    // ---- triggerbot with vis check (szi+0x14) ----
+    // ---- triggerbot with damage-feedback vis check ----
     {
         std::vector<triggerbot::target> trig_tgts;
         trig_tgts.reserve(frame_enemies.size());
@@ -553,17 +553,8 @@ void visuals::draw() {
             t.id = e.object;
             t.head = e.head;
             t.feet = e.position;
-            t.visible = true;
-
-            if (e.snap) {
-                const uint64_t szi = untag(e.snap->szi);
-                if (obj_ptr(szi)) {
-                    uint8_t vis_byte = 0;
-                    mem_read(szi + 0x14, &vis_byte, 1);
-                    t.visible = vis_byte != 0;
-                }
-            }
-
+            t.hp = e.hp;
+            t.max_hp = e.max_hp;
             trig_tgts.push_back(t);
         }
         triggerbot::tick(trig_tgts.data(), int(trig_tgts.size()),
