@@ -106,6 +106,8 @@ void rise_visuals::draw() {
         (unsigned long long)rise_game::g_il2cpp_base, rise_game::g_pid);
     draw_dbg(dbg, dbg_line++);
 
+    rise_game::diag_typeinfo_once();
+
     if (!any) {
         draw_dbg("ESP: all toggles OFF", dbg_line++, IM_COL32(255,255,0,220));
         static long long toff = 0;

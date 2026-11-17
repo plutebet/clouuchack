@@ -27,6 +27,56 @@ namespace rise_game {
     inline long long g_camera_locked_ms = 0;
     inline long long g_last_camera_probe = 0;
 
+    // ---- deep diagnostic (runs once) ----
+    inline void diag_typeinfo_once() {
+        static bool done = false;
+        if (done || !g_il2cpp_base || proc::pid <= 0) return;
+        done = true;
+
+        // 1) Verify ELF magic at base
+        uint8_t magic[4]{};
+        bool elf_ok = mem_read(g_il2cpp_base, magic, 4);
+        diag::log("RISE-DBG", "ELF check base=0x%llx: read=%d magic=%02x%02x%02x%02x (%s)",
+            (unsigned long long)g_il2cpp_base, int(elf_ok),
+            magic[0], magic[1], magic[2], magic[3],
+            (magic[0]==0x7f && magic[1]=='E' && magic[2]=='L' && magic[3]=='F') ? "OK" : "BAD");
+
+        // 2) Read raw TypeInfo slot values (before obj_ptr filter)
+        const uint64_t rvas[] = {
+            rise::PlayerManager_TypeInfo,
+            rise::PlayerController_TypeInfo,
+            rise::MainCamera_TypeInfo,
+            rise::Camera_TypeInfo,
+            rise::CoreAcClient_TypeInfo
+        };
+        const char* names[] = {"PM", "PC", "MainCam", "Cam", "CoreAC"};
+        for (int i = 0; i < 5; i++) {
+            const uint64_t addr = g_il2cpp_base + rvas[i];
+            const uint64_t raw = rpm<uint64_t>(addr);
+            diag::log("RISE-DBG", "TypeInfo[%s] addr=0x%llx rva=0x%llx raw=0x%llx obj_ptr=%d",
+                names[i], (unsigned long long)addr, (unsigned long long)rvas[i],
+                (unsigned long long)raw, int(obj_ptr(raw)));
+        }
+
+        // 3) Dump maps for il2cpp and unity
+        char path[64];
+        std::snprintf(path, sizeof(path), "/proc/%d/maps", proc::pid);
+        FILE* f = std::fopen(path, "r");
+        if (!f) { diag::log("RISE-DBG", "cannot open %s", path); return; }
+        char line[512];
+        int count = 0;
+        while (std::fgets(line, sizeof(line), f) && count < 20) {
+            size_t len = std::strlen(line);
+            if (len > 0 && line[len-1] == '\n') line[len-1] = '\0';
+            if (std::strstr(line, "il2cpp") || std::strstr(line, "libunity")) {
+                diag::log("RISE-DBG", "maps: %s", line);
+                count++;
+            }
+        }
+        std::fclose(f);
+        if (count == 0) diag::log("RISE-DBG", "maps: NO il2cpp/libunity entries found!");
+    }
+
     // ---- TypeInfo resolution (same mechanism as SO2 typeinfo()) ----
     inline uint64_t typeinfo_rise(uint64_t rva) {
         if (!g_il2cpp_base) return 0;
