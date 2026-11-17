@@ -247,10 +247,10 @@ static int run_overlay(const options& opts) {
     if (!touch::init(max_size, min_size, (uint8_t)displayInfo.orientation))
         diag::log("WARN", "no touch device readable in /dev/input; menu cannot be operated");
 
-    if (inject::init(max_size, min_size))
+    if (inject::init(max_size, min_size, (uint8_t)displayInfo.orientation))
         diag::log("INFO", "touch injector initialized (%dx%d)", max_size, min_size);
     else
-        diag::log("WARN", "touch injector failed (/dev/uinput); triggerbot disabled");
+        diag::log("WARN", "touch injector failed (no writable touchscreen); triggerbot disabled");
 
     print_status(oxorany("Game detect ..."));
     if (!opts.no_launch && get_pid() <= 0) launch_standoff();
