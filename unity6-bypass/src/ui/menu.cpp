@@ -57,6 +57,7 @@ namespace ui::menu {
         bool g_panel_dragging = false;
         ImVec2 g_panel_press;
         ImVec2 g_panel_grab;
+        int g_tab = 0;             // 0=Visuals, 1=Trigger
 
         float lrp(float a, float b, float t) { return a + (b - a) * t; }
         ImVec4 lrp_col(const ImVec4& a, const ImVec4& b, float t) {
@@ -305,6 +306,38 @@ namespace ui::menu {
             color_popup(dl, &cfg::esp::box_col, amin, amax, color_y, a, k);
         }
 
+        void trigger_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
+            const float pad = k_pad * k, row = k_row * k;
+            const float cw = amax.x - amin.x - pad * 2.f;
+            ImVec2 c(amin.x + pad, amin.y + pad * 0.5f);
+
+            toggle_row(dl, "Enabled", &cfg::trigger::enabled, c, cw, row, a, k, live);
+            c.y += row;
+
+            static const char* regions[] = {"All", "Head", "Body"};
+            segmented(dl, regions, 3, &cfg::trigger::region, c, cw, 48.f * k, a, k, live);
+            c.y += 48.f * k + 16.f * k;
+
+            static float fov_f = cfg::trigger::fov;
+            slider_row(dl, "FOV", &fov_f, 0.5f, 3.0f, c, cw, row, a, k, live);
+            cfg::trigger::fov = fov_f;
+            c.y += row;
+
+            static float delay_f = static_cast<float>(cfg::trigger::delay_ms);
+            slider_row(dl, "Delay", &delay_f, 0.f, 300.f, c, cw, row, a, k, live);
+            cfg::trigger::delay_ms = static_cast<int>(delay_f);
+            c.y += row;
+
+            static float interval_f = static_cast<float>(cfg::trigger::interval_ms);
+            slider_row(dl, "Interval", &interval_f, 10.f, 500.f, c, cw, row, a, k, live);
+            cfg::trigger::interval_ms = static_cast<int>(interval_f);
+            c.y += row;
+
+            static float confirm_f = static_cast<float>(cfg::trigger::confirm);
+            slider_row(dl, "Confirm", &confirm_f, 1.f, 4.f, c, cw, row, a, k, live);
+            cfg::trigger::confirm = static_cast<int>(confirm_f);
+        }
+
     }
 
     void render() {
@@ -397,12 +430,13 @@ namespace ui::menu {
             g_color_open = false;
         }
 
-        const char* tabs[] = {"Visuals", "Unload"};
-        const int tab_count = 2;
+        const char* tabs[] = {"Visuals", "Trigger", "Unload"};
+        const int tab_count = 3;
         for (int i = 0; i < tab_count; ++i) {
             const ImVec2 tmin(p.x, logo_max.y + k_tab_h * k * float(i)), tmax(p.x + sbw, tmin.y + k_tab_h * k);
             if (i == tab_count - 1 && live && tapped(tmin, tmax)) status::g_quit_request = true;
-            const float sel = (i == 0) ? 1.f : (held(tmin, tmax) ? 1.f : 0.f);
+            else if (i < tab_count - 1 && live && tapped(tmin, tmax)) { g_tab = i; g_color_open = false; }
+            const float sel = (i == g_tab && i < tab_count - 1) ? 1.f : (held(tmin, tmax) ? 1.f : 0.f);
             const float t = anim(std::string("tab_") + tabs[i], sel, 16.f);
             if (t > 0.01f) dl->AddRectFilled(tmin, tmax, col(c_tab_sel, a * t));
             ImFont* f = menu_font();
@@ -414,7 +448,8 @@ namespace ui::menu {
         // ---- content ----
         const ImVec2 amin(p.x + sbw, p.y), amax(pmax.x, pmax.y);
         dl->PushClipRect(amin, amax, true);
-        visuals_tab(dl, amin, amax, a, k, live);
+        if (g_tab == 0) visuals_tab(dl, amin, amax, a, k, live);
+        else if (g_tab == 1) trigger_tab(dl, amin, amax, a, k, live);
         dl->PopClipRect();
 
         dl->PopClipRect();

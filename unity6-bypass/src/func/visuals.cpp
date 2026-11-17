@@ -6,6 +6,7 @@
 // ================================================================================
 
 #include "visuals.hpp"
+#include "triggerbot.hpp"
 #include "../game/game.hpp"
 #include "../game/math.hpp"
 #include "../game/player.hpp"
@@ -514,6 +515,18 @@ void visuals::draw() {
             dnick(label, it.min, it.cx, text_sz, fade);
         }
         if (cfg::esp::weapon) dweapon(Enemy.weapon, it.cx, it.max.y + 3.f, it.max.x - it.min.x, text_sz, fade);
+    }
+
+    // ---- triggerbot ----
+    if (cfg::trigger::enabled) {
+        static std::vector<triggerbot::target> s_tgt;
+        s_tgt.clear();
+        for (const auto& e : frame_enemies)
+            s_tgt.push_back({e.object, e.head, e.position});
+        triggerbot::tick(s_tgt.data(), static_cast<int>(s_tgt.size()),
+                         ViewMatrix, ProjectionMatrix, now_ms);
+    } else {
+        triggerbot::tick(nullptr, 0, ViewMatrix, ProjectionMatrix, now_ms);
     }
 
     // PROBE (read-only, opt-in): while /data/local/tmp/.sf_probe exists, dumps the szi bytes

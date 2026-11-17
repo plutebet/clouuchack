@@ -18,4 +18,13 @@ namespace esp {
     inline ImVec4 team_col = ImVec4(0.3f, 0.6f, 1.f, 1.f);
 }
 
+namespace trigger {
+    inline bool enabled = false;
+    inline float fov = 1.0f;
+    inline int delay_ms = 50;
+    inline int interval_ms = 100;
+    inline int confirm = 2;
+    inline int region = 0;         // 0=head+body, 1=head only, 2=body only
+}
+
 }
