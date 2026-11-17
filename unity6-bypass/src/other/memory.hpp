@@ -165,6 +165,11 @@ inline T rpm(uint64_t a) {
     return v;
 }
 
+// Read a pointer and strip the ARM64 MTE/TBI top-byte tag.
+inline uint64_t rptr(uint64_t a) {
+    return rpm<uint64_t>(a) & 0x00FFFFFFFFFFFFFFULL;
+}
+
 inline bool mem_write(uint64_t a, const void* b, size_t l) {
     if (proc::pid < 0 || a == 0 || l == 0 || b == nullptr || a < 0x1000) return false;
     struct iovec loc[1];

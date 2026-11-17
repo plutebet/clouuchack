@@ -211,18 +211,16 @@ inline void ensure_scan_context() {
     }
 }
 
-inline bool plausible(uint64_t p) { return p >= 0x10000 && p < 0x0001000000000000ULL; }
+// ARM64 MTE/TBI: strip the top-byte tag from a pointer.
+inline uint64_t untag(uint64_t p) { return p & 0x00FFFFFFFFFFFFFFULL; }
+
+inline bool plausible(uint64_t p) { p = untag(p); return p >= 0x10000 && p < 0x0001000000000000ULL; }
 inline bool obj_ptr(uint64_t p);
-// Objects live above 4 GiB on this runtime; anything else is a field value,
-// not an object, and must not be read (the scanner's false registry matches
-// used to read junk such as 0x1d0000 on every pass).
 inline bool exact_class(uint64_t object, uint64_t klass) {
-    return klass && obj_ptr(object) && rpm<uint64_t>(object) == klass;
+    return klass && obj_ptr(object) && untag(rpm<uint64_t>(object)) == klass;
 }
 
-// Heap object pointers on this 64-bit runtime are always above 4 GiB; field
-// values also contain floats/ints which must not be probed as pointers.
-inline bool obj_ptr(uint64_t p) { return p >= 0x100000000ULL && p < 0x800000000000ULL; }
+inline bool obj_ptr(uint64_t p) { p = untag(p); return p >= 0x100000000ULL && p < 0x800000000000ULL; }
 
 // Il2CppClass* from a TypeInfo slot. On this il2cpp the slots are lazy: until
 // generated code touches the class the slot holds an encoded metadata index
@@ -245,7 +243,7 @@ inline uint64_t typeinfo(uint64_t rva, uint64_t lib = 0) {
     }
     for (const slot& s : cache)
         if (s.rva == rva) return s.value;
-    const uint64_t value = rpm<uint64_t>(base + rva);
+    const uint64_t value = untag(rpm<uint64_t>(base + rva));
     if (!obj_ptr(value)) return 0;
     cache.push_back({rva, value});
     return value;

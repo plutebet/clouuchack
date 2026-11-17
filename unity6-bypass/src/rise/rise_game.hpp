@@ -91,7 +91,8 @@ namespace rise_game {
         }
         for (const slot& s : cache)
             if (s.rva == rva) return s.value;
-        const uint64_t value = rpm<uint64_t>(g_il2cpp_base + rva);
+        const uint64_t raw = rpm<uint64_t>(g_il2cpp_base + rva);
+        const uint64_t value = untag(raw);
         if (!obj_ptr(value)) return 0;
         cache.push_back({rva, value});
         return value;
@@ -135,11 +136,11 @@ namespace rise_game {
         const uint64_t klass = typeinfo_rise(rise::PlayerManager_TypeInfo);
         if (!klass) return 0;
         for (uint64_t sf_off : {uint64_t(0xB8), uint64_t(0xB0), uint64_t(0xC0)}) {
-            const uint64_t static_fields = rpm<uint64_t>(klass + sf_off);
+            const uint64_t static_fields = rptr(klass + sf_off);
             if (!plausible(static_fields)) continue;
-            const uint64_t singleton = rpm<uint64_t>(static_fields + rise::main_camera_singleton);
+            const uint64_t singleton = rptr(static_fields + rise::main_camera_singleton);
             if (!obj_ptr(singleton)) continue;
-            const uint64_t obj_klass = rpm<uint64_t>(singleton);
+            const uint64_t obj_klass = rptr(singleton);
             if (obj_klass == klass) return singleton;
         }
         return 0;
@@ -151,11 +152,10 @@ namespace rise_game {
         if (!obj_ptr(dict)) return false;
         const int count = rpm<int>(dict + rise::dict_count);
         if (count <= 0 || count > 64) return false;
-        const uint64_t entries_arr = rpm<uint64_t>(dict + rise::dict_entries);
+        const uint64_t entries_arr = rptr(dict + rise::dict_entries);
         if (!obj_ptr(entries_arr)) return false;
         const uint64_t arr_len = rpm<uint64_t>(entries_arr + rise::array_length);
         if (arr_len < uint64_t(count) || arr_len > 4096) return false;
-        // Read all entries in bulk
         const size_t entry_count = size_t(std::min(int(arr_len), 128));
         const size_t block_size = entry_count * size_t(rise::dict_entry_size);
         std::vector<uint8_t> buf(block_size, 0);
@@ -164,9 +164,10 @@ namespace rise_game {
             const uint8_t* entry = buf.data() + i * size_t(rise::dict_entry_size);
             int32_t hashCode = 0;
             std::memcpy(&hashCode, entry, 4);
-            if (hashCode < 0) continue; // unused slot
+            if (hashCode < 0) continue;
             uint64_t value = 0;
             std::memcpy(&value, entry + rise::dict_entry_value, 8);
+            value = untag(value);
             if (obj_ptr(value)) controllers.push_back(value);
         }
         return true;
@@ -182,26 +183,26 @@ namespace rise_game {
         }
         // Revalidate singleton
         const uint64_t pm_klass = typeinfo_rise(rise::PlayerManager_TypeInfo);
-        if (!pm_klass || rpm<uint64_t>(g_pm_singleton) != pm_klass) {
+        if (!pm_klass || rptr(g_pm_singleton) != pm_klass) {
             g_pm_singleton = 0;
             return out;
         }
         // Read local player
-        const uint64_t local_pc = rpm<uint64_t>(g_pm_singleton + rise::pm_local_player);
+        const uint64_t local_pc = rptr(g_pm_singleton + rise::pm_local_player);
         // Read dictionary
-        const uint64_t dict = rpm<uint64_t>(g_pm_singleton + rise::pm_dict);
+        const uint64_t dict = rptr(g_pm_singleton + rise::pm_dict);
         std::vector<uint64_t> controllers;
         if (!read_dict_players(dict, controllers)) return out;
         // Build snapshots
         const uint64_t pc_klass = typeinfo_rise(rise::PlayerController_TypeInfo);
         for (uint64_t pc : controllers) {
-            if (!pc_klass || rpm<uint64_t>(pc) != pc_klass) continue;
+            if (!pc_klass || rptr(pc) != pc_klass) continue;
             rise_player p{};
             p.controller = pc;
             p.is_local = (pc == local_pc);
             p.team = rpm<uint8_t>(pc + rise::pc_team);
-            p.net_ctrl = rpm<uint64_t>(pc + rise::pc_net_ctrl);
-            p.transform = rpm<uint64_t>(pc + rise::pc_transform);
+            p.net_ctrl = rptr(pc + rise::pc_net_ctrl);
+            p.transform = rptr(pc + rise::pc_transform);
             if (!read_health(p.net_ctrl, p.health, p.armor, p.alive)) {
                 p.health = 100;
                 p.armor = 0;
@@ -232,17 +233,17 @@ namespace rise_game {
         if (!mc_klass) return false;
         // Static fields -> singleton
         for (uint64_t sf_off : {uint64_t(0xB8), uint64_t(0xB0), uint64_t(0xC0)}) {
-            const uint64_t static_fields = rpm<uint64_t>(mc_klass + sf_off);
+            const uint64_t static_fields = rptr(mc_klass + sf_off);
             if (!plausible(static_fields)) continue;
-            const uint64_t mc_instance = rpm<uint64_t>(static_fields + rise::main_camera_singleton);
+            const uint64_t mc_instance = rptr(static_fields + rise::main_camera_singleton);
             if (!obj_ptr(mc_instance)) continue;
-            if (rpm<uint64_t>(mc_instance) != mc_klass) continue;
+            if (rptr(mc_instance) != mc_klass) continue;
             // CameraMovementController.Camera at +0x98
-            const uint64_t managed_camera = rpm<uint64_t>(mc_instance + rise::cmc_camera);
+            const uint64_t managed_camera = rptr(mc_instance + rise::cmc_camera);
             if (!obj_ptr(managed_camera)) continue;
             const uint64_t camera_klass = typeinfo_rise(rise::Camera_TypeInfo);
-            if (!camera_klass || rpm<uint64_t>(managed_camera) != camera_klass) continue;
-            const uint64_t native = rpm<uint64_t>(managed_camera + rise::unity_cached_ptr);
+            if (!camera_klass || rptr(managed_camera) != camera_klass) continue;
+            const uint64_t native = rptr(managed_camera + rise::unity_cached_ptr);
             if (!obj_ptr(native) || (native & 7) != 0) continue;
             // Try to detect matrix pair
             int v_off = -1, p_off = -1;
@@ -262,7 +263,7 @@ namespace rise_game {
     // ---- Transform position (reuses SO2's Unity transform walking) ----
     inline bool player_position(uint64_t managed_transform, Vector3& out) {
         if (!obj_ptr(managed_transform)) return false;
-        const uint64_t native = rpm<uint64_t>(managed_transform + rise::unity_cached_ptr);
+        const uint64_t native = rptr(managed_transform + rise::unity_cached_ptr);
         if (!obj_ptr(native)) return false;
         return player::native_transform_position(native, out);
     }

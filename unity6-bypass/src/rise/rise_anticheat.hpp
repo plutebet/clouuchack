@@ -139,11 +139,11 @@ namespace rise_ac {
         if (!klass) return false;
 
         for (uint64_t sf_off : {uint64_t(0xB8), uint64_t(0xB0), uint64_t(0xC0)}) {
-            const uint64_t static_fields = rpm<uint64_t>(klass + sf_off);
+            const uint64_t static_fields = rptr(klass + sf_off);
             if (!plausible(static_fields)) continue;
-            const uint64_t singleton = rpm<uint64_t>(static_fields);
+            const uint64_t singleton = rptr(static_fields);
             if (!singleton) continue;
-            const uint64_t obj_klass = rpm<uint64_t>(singleton);
+            const uint64_t obj_klass = rptr(singleton);
             if (obj_klass != klass) continue;
 
             const uint64_t zero = 0;
