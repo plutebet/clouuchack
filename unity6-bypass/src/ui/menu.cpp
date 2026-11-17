@@ -380,6 +380,9 @@ namespace ui::menu {
             c.y += row;
 
             int_slider_row(dl, "Confirm", &cfg::trigger::confirm, 1, 4, c, cw, row, a, k, live);
+            c.y += row;
+
+            toggle_row(dl, "Vis Check", &cfg::trigger::vis_check, c, cw, row, a, k, live);
         }
 
     }

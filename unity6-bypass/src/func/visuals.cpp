@@ -544,10 +544,13 @@ void visuals::draw() {
                     ImVec2(cfg::trigger::fire_x, cfg::trigger::fire_y + 6.f), IM_COL32(255, 60, 60, 160), 1.5f);
     }
 
-    // ---- triggerbot ----
+    // ---- triggerbot + vis-byte scanner ----
     {
-        static long long vis_log = 0;
-        const bool log_vis = diag::every(vis_log, 5000);
+        struct vis_cache { uint8_t szi48[48]; uint8_t ydm16[16]; uint8_t odq16[16]; };
+        static std::unordered_map<uint64_t, vis_cache> vis_last;
+        static long long vis_periodic = 0;
+        const bool periodic_dump = diag::every(vis_periodic, 10000);
+
         std::vector<triggerbot::target> trig_tgts;
         trig_tgts.reserve(frame_enemies.size());
         for (const auto& e : frame_enemies) {
@@ -556,18 +559,32 @@ void visuals::draw() {
             t.head = e.head;
             t.feet = e.position;
             t.visible = true;
-            if (cfg::esp::visible_check && e.snap) {
+
+            if (e.snap) {
+                vis_cache cur{};
+                std::memset(&cur, 0xEE, sizeof(cur));
                 const uint64_t szi = untag(e.snap->szi);
-                if (obj_ptr(szi)) {
-                    uint8_t vb[4]{};
-                    if (mem_read(szi + 0x10, vb, 4))
-                        t.visible = (vb[0] != 0);
-                    if (log_vis)
-                        diag::log("VIS", "enemy=0x%llx szi=0x%llx b=[%02X %02X %02X %02X] vis=%d dist=%.1f",
-                                  (unsigned long long)e.object, (unsigned long long)szi,
-                                  vb[0], vb[1], vb[2], vb[3], int(t.visible), e.distance);
+                const uint64_t ydm = untag(e.snap->stats);
+                if (obj_ptr(szi)) mem_read(szi + 0x10, cur.szi48, 48);
+                if (obj_ptr(ydm)) mem_read(ydm + 0x18, cur.ydm16, 16);
+                mem_read(e.object + 0x81, cur.odq16, 15);
+
+                const auto it = vis_last.find(e.object);
+                const bool changed = it == vis_last.end() ||
+                    std::memcmp(&it->second, &cur, sizeof(cur)) != 0;
+                if (changed || periodic_dump) {
+                    char s_hex[48*3+1], y_hex[16*3+1], o_hex[16*3+1];
+                    for (int b = 0; b < 48; ++b) snprintf(s_hex + b*3, 4, "%02X ", cur.szi48[b]);
+                    for (int b = 0; b < 16; ++b) snprintf(y_hex + b*3, 4, "%02X ", cur.ydm16[b]);
+                    for (int b = 0; b < 15; ++b) snprintf(o_hex + b*3, 4, "%02X ", cur.odq16[b]);
+                    diag::log("VSCAN", "e=0x%llx d=%.1f szi[10..3F]=%s",
+                              (unsigned long long)e.object, e.distance, s_hex);
+                    diag::log("VSCAN", "e=0x%llx ydm[18..27]=%s odq[81..8F]=%s%s",
+                              (unsigned long long)e.object, y_hex, o_hex, changed ? " CHANGED" : "");
                 }
+                vis_last[e.object] = cur;
             }
+
             trig_tgts.push_back(t);
         }
         triggerbot::tick(trig_tgts.data(), int(trig_tgts.size()),

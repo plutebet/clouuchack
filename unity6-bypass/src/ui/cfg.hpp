@@ -21,14 +21,15 @@ namespace esp {
 namespace trigger {
     inline bool enabled = false;
     inline float fov = 1.0f;
-    inline int delay_ms = 50;
-    inline int interval_ms = 100;
-    inline int confirm = 2;
+    inline int delay_ms = 0;
+    inline int interval_ms = 70;
+    inline int confirm = 1;
     inline int region = 0;
     inline float fire_x = 0.f;
     inline float fire_y = 0.f;
     inline bool fire_set = false;
     inline bool picking = false;
+    inline bool vis_check = false;
 }
 
 }

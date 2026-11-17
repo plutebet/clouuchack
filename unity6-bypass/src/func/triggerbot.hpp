@@ -64,7 +64,7 @@ inline uint64_t plan(const target* targets, int count,
 
     for (int i = 0; i < count; ++i) {
         const target& t = targets[i];
-        if (cfg::esp::visible_check && !t.visible) continue;
+        if (cfg::trigger::vis_check && !t.visible) continue;
 
         for (int part = 0; part < 2; ++part) {
             if (cfg::trigger::region == 1 && part != 0) continue;
@@ -74,7 +74,7 @@ inline uint64_t plan(const target* targets, int count,
             Vector3 point = part == 0
                 ? t.head
                 : t.feet + (t.head - t.feet) * 0.65f;
-            float radius = part == 0 ? 0.12f : 0.20f;
+            float radius = part == 0 ? 0.14f : 0.25f;
 
             if (hit_point(point, view, proj, radius, depth) && depth < best) {
                 best = depth;
@@ -121,7 +121,7 @@ inline void tick(const target* targets, int count,
                   int(cfg::trigger::enabled), int(cfg::trigger::fire_set),
                   cfg::trigger::fire_x, cfg::trigger::fire_y,
                   count, vis_count, int(s_pressed), s_fire_count, inject::g_fd,
-                  int(cfg::esp::visible_check));
+                  int(cfg::trigger::vis_check));
     }
 
     if (s_pressed && now_ms >= s_release_at) {
@@ -144,7 +144,7 @@ inline void tick(const target* targets, int count,
 
     inject::tap_down(cfg::trigger::fire_x, cfg::trigger::fire_y);
     s_pressed = true;
-    s_release_at = now_ms + 60;
+    s_release_at = now_ms + 40;
     ++s_fire_count;
 
     diag::log("TRIGGER", "fire #%u target=0x%llx confirmed=%u pos=(%.0f,%.0f)",
