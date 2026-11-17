@@ -5,6 +5,7 @@
 #include "../ui/theme/theme.hpp"
 #include "../ui/cfg.hpp"
 #include "../other/crash.hpp"
+#include "../other/diag.hpp"
 #include "../protect/oxorany.hpp"
 #include "imgui.h"
 #include <cmath>
@@ -91,6 +92,11 @@ static void draw_dbg(const char* text, int line, ImU32 col = IM_COL32(0,255,0,22
 
 void rise_visuals::draw() {
     if (!(g_sw >= 2.f) || !(g_sh >= 2.f)) return;
+
+    static long long hb = 0;
+    if (diag::every(hb, 5000))
+        diag::log("RISE-DBG", "draw() heartbeat sw=%.0f sh=%.0f", g_sw, g_sh);
+
     const bool any = cfg::esp::box || cfg::esp::name || cfg::esp::health;
 
     int dbg_line = 0;
@@ -102,6 +108,9 @@ void rise_visuals::draw() {
 
     if (!any) {
         draw_dbg("ESP: all toggles OFF", dbg_line++, IM_COL32(255,255,0,220));
+        static long long toff = 0;
+        if (diag::every(toff, 3000)) diag::log("RISE-DBG", "ESP toggles off box=%d name=%d hp=%d",
+            int(cfg::esp::box), int(cfg::esp::name), int(cfg::esp::health));
         return;
     }
 
@@ -116,12 +125,25 @@ void rise_visuals::draw() {
         s_players_ms = now_ms;
     }
 
-    std::snprintf(dbg, sizeof(dbg), "players=%zu pm=0x%llx",
-        s_players.size(), (unsigned long long)rise_game::g_pm_singleton);
-    draw_dbg(dbg, dbg_line++);
+    // TypeInfo diagnostic
+    {
+        const uint64_t pm_klass = rise_game::typeinfo_rise(rise::PlayerManager_TypeInfo);
+        std::snprintf(dbg, sizeof(dbg), "PM klass=0x%llx pm=0x%llx players=%zu",
+            (unsigned long long)pm_klass,
+            (unsigned long long)rise_game::g_pm_singleton,
+            s_players.size());
+        draw_dbg(dbg, dbg_line++);
+    }
 
     if (s_players.empty()) {
         draw_dbg("ESP: no players from PM", dbg_line++, IM_COL32(255,80,80,220));
+        static long long tpm = 0;
+        if (diag::every(tpm, 3000)) {
+            const uint64_t pk = rise_game::typeinfo_rise(rise::PlayerManager_TypeInfo);
+            diag::log("RISE-DBG", "no players: PM_klass=0x%llx pm_singleton=0x%llx il2cpp=0x%llx",
+                (unsigned long long)pk, (unsigned long long)rise_game::g_pm_singleton,
+                (unsigned long long)rise_game::g_il2cpp_base);
+        }
         return;
     }
 
@@ -138,6 +160,8 @@ void rise_visuals::draw() {
     for (const auto& p : s_players) if (p.is_local) { Local = &p; break; }
     if (!Local) {
         draw_dbg("ESP: no local player", dbg_line++, IM_COL32(255,80,80,220));
+        static long long tlp = 0;
+        if (diag::every(tlp, 3000)) diag::log("RISE-DBG", "no local player in %zu entries", s_players.size());
         return;
     }
     const uint8_t LocalTeam = Local->team;
@@ -155,14 +179,27 @@ void rise_visuals::draw() {
     std::snprintf(dbg, sizeof(dbg), "camera=%s vm11=%.2f pm22=%.2f",
         cam_ok ? "OK" : "FAIL", ViewMatrix.m11, ProjectionMatrix.m22);
     draw_dbg(dbg, dbg_line++, cam_ok ? IM_COL32(0,255,0,220) : IM_COL32(255,80,80,220));
-    if (!cam_ok) return;
+    if (!cam_ok) {
+        static long long tcam = 0;
+        if (diag::every(tcam, 3000))
+            diag::log("RISE-DBG", "camera FAIL native=0x%llx view_off=%d proj_off=%d",
+                (unsigned long long)rise_game::g_camera_native,
+                rise_game::g_camera_view_off, rise_game::g_camera_proj_off);
+        return;
+    }
 
     Vector3 LocalPosition{};
     const bool pos_ok = rise_game::player_position(Local->transform, LocalPosition);
     std::snprintf(dbg, sizeof(dbg), "localpos=%s (%.1f,%.1f,%.1f)",
         pos_ok ? "OK" : "FAIL", LocalPosition.x, LocalPosition.y, LocalPosition.z);
     draw_dbg(dbg, dbg_line++, pos_ok ? IM_COL32(0,255,0,220) : IM_COL32(255,80,80,220));
-    if (!pos_ok) return;
+    if (!pos_ok) {
+        static long long tpos = 0;
+        if (diag::every(tpos, 3000))
+            diag::log("RISE-DBG", "localpos FAIL transform=0x%llx",
+                (unsigned long long)Local->transform);
+        return;
+    }
     if (!std::isfinite(LocalPosition.x) ||
         (LocalPosition.x == 0.f && LocalPosition.y == 0.f && LocalPosition.z == 0.f)) return;
 
