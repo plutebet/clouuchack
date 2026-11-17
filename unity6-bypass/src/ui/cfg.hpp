@@ -22,7 +22,7 @@ namespace trigger {
     inline bool enabled = false;
     inline float fov = 1.0f;
     inline int delay_ms = 0;
-    inline int interval_ms = 70;
+    inline int interval_ms = 50;
     inline int confirm = 1;
     inline int region = 0;
     inline float fire_x = 0.f;

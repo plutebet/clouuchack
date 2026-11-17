@@ -19,23 +19,19 @@ struct target {
     int max_hp;
 };
 
-// ---- damage feedback vis check ----
-// Track HP of the target we're shooting. If N taps don't reduce HP,
-// the target is behind a wall — blacklist it for a cooldown period.
-struct damage_fb {
-    int start_hp{0};
-    uint32_t taps{0};
-    long long started{0};
-};
-inline std::unordered_map<uint64_t, damage_fb> s_dmg;
+// ---- damage-feedback wall detection ----
 inline std::unordered_map<uint64_t, long long> s_wall; // id -> unblock time
+inline uint64_t s_wt_id = 0;      // target being tracked
+inline int      s_wt_hp = 0;      // HP when tracking started
+inline uint32_t s_wt_fires = 0;   // fires since tracking started
+inline long long s_wt_first = 0;  // time of first fire
+inline long long s_wt_last = 0;   // time of last fire
+inline uint32_t s_wall_blocks = 0;
 
-static constexpr uint32_t kWallTaps = 5;
+static constexpr uint32_t kWallFires = 5;
 static constexpr long long kWallTimeMs = 400;
 static constexpr long long kWallCooldownMs = 1500;
-
-inline uint64_t s_fire_target = 0;
-inline uint32_t s_wall_blocks = 0;
+static constexpr long long kWallStaleMs = 2000;
 
 // ---- core state ----
 inline uint64_t s_tracking = 0;
@@ -56,6 +52,7 @@ inline void reset() {
     s_last_confirm_seq = 0;
 }
 
+// ---- sphere hitbox (head or body center) ----
 inline bool hit_point(const Vector3& point, const matrix& view, const matrix& proj,
                       float radius, float& depth) {
     Vector4 cam = matrix_multiply(view, Vector4(point.x, point.y, point.z, 1.f));
@@ -77,6 +74,43 @@ inline bool hit_point(const Vector3& point, const matrix& view, const matrix& pr
     return px * px + py * py <= px_radius * px_radius;
 }
 
+// ---- full-body capsule hitbox (head to feet) ----
+inline bool hit_capsule(const Vector3& head, const Vector3& feet,
+                        const matrix& view, const matrix& proj, float& depth) {
+    Vector4 cam_h = matrix_multiply(view, Vector4(head.x, head.y, head.z, 1.f));
+    Vector4 clip_h = matrix_multiply(proj, cam_h);
+    if (!std::isfinite(clip_h.w) || clip_h.w < 0.05f) return false;
+
+    Vector4 cam_f = matrix_multiply(view, Vector4(feet.x, feet.y, feet.z, 1.f));
+    Vector4 clip_f = matrix_multiply(proj, cam_f);
+    if (!std::isfinite(clip_f.w) || clip_f.w < 0.05f) return false;
+
+    float hx = clip_h.x / clip_h.w * g_sw * 0.5f;
+    float hy = clip_h.y / clip_h.w * g_sh * 0.5f;
+    float fx = clip_f.x / clip_f.w * g_sw * 0.5f;
+    float fy = clip_f.y / clip_f.w * g_sh * 0.5f;
+
+    if (!std::isfinite(hx) || !std::isfinite(hy) ||
+        !std::isfinite(fx) || !std::isfinite(fy)) return false;
+
+    float dx = fx - hx, dy = fy - hy;
+    float len2 = dx * dx + dy * dy;
+    float height = std::sqrt(len2);
+
+    // half-width ≈ 20% of screen height (player ~0.5m wide, ~1.8m tall)
+    float half_w = std::clamp(height * 0.20f, 6.f, g_sw * 0.5f);
+    half_w *= cfg::trigger::fov;
+
+    // distance from crosshair (0,0) to line segment [head, feet] in screen px
+    float t = len2 > 0.001f ? std::clamp((-hx * dx + -hy * dy) / len2, 0.f, 1.f) : 0.f;
+    float cx = hx + t * dx;
+    float cy = hy + t * dy;
+    float dist2 = cx * cx + cy * cy;
+
+    depth = clip_h.w * (1.f - t) + clip_f.w * t;
+    return dist2 <= half_w * half_w;
+}
+
 inline uint64_t plan(const target* targets, int count,
                      const matrix& view, const matrix& proj, long long now_ms) {
     ++s_seq;
@@ -92,23 +126,26 @@ inline uint64_t plan(const target* targets, int count,
     for (int i = 0; i < count; ++i) {
         const target& t = targets[i];
 
-        // damage feedback: skip wall-blocked targets
         if (cfg::trigger::vis_check && s_wall.count(t.id)) continue;
 
-        for (int part = 0; part < 2; ++part) {
-            if (cfg::trigger::region == 1 && part != 0) continue;
-            if (cfg::trigger::region == 2 && part != 1) continue;
+        bool hit = false;
+        float depth = 0.f;
 
-            float depth = 0.f;
-            Vector3 point = part == 0
-                ? t.head
-                : t.feet + (t.head - t.feet) * 0.65f;
-            float radius = part == 0 ? 0.14f : 0.25f;
+        if (cfg::trigger::region == 1) {
+            // head only
+            hit = hit_point(t.head, view, proj, 0.14f, depth);
+        } else if (cfg::trigger::region == 2) {
+            // body only
+            Vector3 body = t.feet + (t.head - t.feet) * 0.65f;
+            hit = hit_point(body, view, proj, 0.25f, depth);
+        } else {
+            // full body capsule
+            hit = hit_capsule(t.head, t.feet, view, proj, depth);
+        }
 
-            if (hit_point(point, view, proj, radius, depth) && depth < best) {
-                best = depth;
-                chosen = t.id;
-            }
+        if (hit && depth < best) {
+            best = depth;
+            chosen = t.id;
         }
     }
 
@@ -144,11 +181,12 @@ inline void tick(const target* targets, int count,
                  const matrix& view, const matrix& proj, long long now_ms) {
     static long long status_log = 0;
     if (diag::every(status_log, 3000)) {
-        diag::log("TRIGGER", "status: en=%d fire_set=%d pos=(%.0f,%.0f) tgts=%d pressed=%d fires=%u walls=%u fd=%d vc=%d",
+        diag::log("TRIGGER", "status: en=%d fire_set=%d pos=(%.0f,%.0f) tgts=%d pressed=%d fires=%u walls=%u wt=(0x%llx f=%u hp=%d) fd=%d vc=%d",
                   int(cfg::trigger::enabled), int(cfg::trigger::fire_set),
                   cfg::trigger::fire_x, cfg::trigger::fire_y,
-                  count, int(s_pressed), s_fire_count, s_wall_blocks, inject::g_fd,
-                  int(cfg::trigger::vis_check));
+                  count, int(s_pressed), s_fire_count, s_wall_blocks,
+                  (unsigned long long)s_wt_id, s_wt_fires, s_wt_hp,
+                  inject::g_fd, int(cfg::trigger::vis_check));
     }
 
     if (s_pressed && now_ms >= s_release_at) {
@@ -167,63 +205,58 @@ inline void tick(const target* targets, int count,
     if (s_pressed) return;
 
     uint64_t id = plan(targets, count, view, proj, now_ms);
-    if (!id) {
-        // lost target — reset damage tracker
-        if (s_fire_target) { s_dmg.erase(s_fire_target); s_fire_target = 0; }
-        return;
-    }
+    if (!id) return;
 
-    // ---- damage feedback vis check ----
+    // ---- damage-feedback wall check ----
     if (cfg::trigger::vis_check) {
-        // find this target's HP
         int hp = 0;
         for (int i = 0; i < count; ++i)
             if (targets[i].id == id) { hp = targets[i].hp; break; }
 
-        // target changed — reset old tracker
-        if (id != s_fire_target) {
-            if (s_fire_target) s_dmg.erase(s_fire_target);
-            s_fire_target = id;
-            s_dmg.erase(id);
+        // new target or stale tracker: start fresh
+        if (id != s_wt_id || (s_wt_fires > 0 && now_ms - s_wt_last > kWallStaleMs)) {
+            s_wt_id = id;
+            s_wt_hp = hp;
+            s_wt_fires = 0;
+            s_wt_first = now_ms;
         }
 
-        auto& df = s_dmg[id];
-        if (df.taps == 0) {
-            // first tap at this target
-            df.start_hp = hp;
-            df.started = now_ms;
-        } else if (hp < df.start_hp) {
-            // HP dropped — our shots are landing, target is visible
-            df.start_hp = hp;
-            df.taps = 0;
-            df.started = now_ms;
+        // HP dropped since tracking started: shots are landing
+        if (hp < s_wt_hp && hp > 0) {
+            s_wt_hp = hp;
+            s_wt_fires = 0;
+            s_wt_first = now_ms;
             s_wall.erase(id);
         }
 
-        // wall detection: enough taps with no HP change
-        if (df.taps >= kWallTaps && now_ms - df.started >= kWallTimeMs && hp >= df.start_hp) {
+        // wall condition: enough fires, enough time, HP unchanged
+        if (s_wt_fires >= kWallFires &&
+            now_ms - s_wt_first >= kWallTimeMs &&
+            hp >= s_wt_hp) {
             s_wall[id] = now_ms + kWallCooldownMs;
             ++s_wall_blocks;
-            diag::log("TRIGGER", "WALL id=0x%llx hp=%d after %u taps, block %lldms (total walls=%u)",
-                      (unsigned long long)id, hp, df.taps, kWallCooldownMs, s_wall_blocks);
-            df.taps = 0;
-            df.started = now_ms;
+            diag::log("TRIGGER", "WALL id=0x%llx hp=%d fires=%u dt=%lldms block=%lldms (total=%u)",
+                      (unsigned long long)id, hp, s_wt_fires,
+                      now_ms - s_wt_first, kWallCooldownMs, s_wall_blocks);
+            s_wt_id = 0;
+            s_wt_fires = 0;
             reset();
             return;
         }
 
-        df.taps++;
+        s_wt_fires++;
+        s_wt_last = now_ms;
     }
 
     inject::tap_down(cfg::trigger::fire_x, cfg::trigger::fire_y);
     s_pressed = true;
-    s_release_at = now_ms + 40;
+    s_release_at = now_ms + 30;
     ++s_fire_count;
 
-    diag::log("TRIGGER", "fire #%u target=0x%llx hp=%d confirmed=%u pos=(%.0f,%.0f)",
+    diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d conf=%u pos=(%.0f,%.0f) wf=%u",
               s_fire_count, (unsigned long long)id,
               [&]{ for (int i = 0; i < count; ++i) if (targets[i].id == id) return targets[i].hp; return 0; }(),
-              s_confirmed, cfg::trigger::fire_x, cfg::trigger::fire_y);
+              s_confirmed, cfg::trigger::fire_x, cfg::trigger::fire_y, s_wt_fires);
 }
 
 }
