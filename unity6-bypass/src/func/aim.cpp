@@ -813,8 +813,8 @@ static bool rig_read(float& pitch, float& yaw) {
         if (!std::isfinite(f)) return false;
     for (float f : yq)
         if (!std::isfinite(f)) return false;
-    pitch = 2.f * std::atan2(pq[0], pq[3]) * 57.2957795f;
-    yaw = 2.f * std::atan2(yq[1], yq[3]) * 57.2957795f;
+    pitch = wrap_to_180(2.f * std::atan2(pq[0], pq[3]) * 57.2957795f);
+    yaw = wrap_to_180(2.f * std::atan2(yq[1], yq[3]) * 57.2957795f);
     if (!std::isfinite(pitch) || !std::isfinite(yaw)) return false;
     // keep the fresh quats for the sign-preserving write
     std::memcpy(s_rig_pivot.quat, pq, sizeof(pq));
@@ -942,9 +942,13 @@ static void loop() {
         const uint64_t kgd = resolve_kgd(local);
         if (local != collect_local || (!s_vqn_input && !s_vqn_player)) {
             if (local != collect_local) {
-                diag::log("AIM", "local changed 0x%llx -> 0x%llx, re-resolving",
+                diag::log("AIM", "local changed 0x%llx -> 0x%llx, re-resolving (dropping rig+kgd+bor)",
                           (unsigned long long)collect_local, (unsigned long long)local);
-                s_rig_giveup = 0;   // a new local player may expose the rig
+                s_rig_valid = false;
+                s_rig_comp = 0;
+                s_rig_giveup = 0;
+                s_bor_cache = 0;
+                s_bor_local = 0;
             }
             vqn_collect(local, kgd);
             collect_local = local;
@@ -1059,6 +1063,15 @@ static void loop() {
         static uint64_t s_return_target = 0;     // back_camera
         static float s_return_pitch = 0.f, s_return_yaw = 0.f;
         static long long s_last_aim_ms = 0;
+        static float s_written_p = 0.f, s_written_y = 0.f;
+        static bool s_have_written = false;
+        static uint64_t s_engage_local = 0;
+        if (local != s_engage_local) {
+            s_engage_local = local;
+            s_locked = 0;
+            s_return_target = 0;
+            s_have_written = false;
+        }
         const long long now = now_ms();
         // switching the priority mode drops the lock so the new metric takes
         // effect on the very next selection instead of being masked by the
@@ -1077,8 +1090,6 @@ static void loop() {
         // the lock and let the CURRENT metric re-select from the player's
         // steered view. Recoil and micro-corrections stay far below the
         // threshold; a swipe is 5-30 degrees per tick.
-        static float s_written_p = 0.f, s_written_y = 0.f;
-        static bool s_have_written = false;
         if (s_have_written && s_locked) {
             const float pull = std::hypot(cur_pitch - s_written_p,
                                           wrap_to_180(cur_yaw - s_written_y));

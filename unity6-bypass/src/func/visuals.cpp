@@ -272,7 +272,7 @@ void visuals::draw() {
     auto apply_pose = [](enemy_frame& e, const player::PlayerPose& Shape) -> bool {
         if (!Shape.valid) return false;
         e.position = Shape.feet;
-        e.head = Shape.has_head ? Shape.head : Shape.feet + Vector3(0.f, 1.67f, 0.f);
+        e.head = Shape.has_head ? Shape.head : Shape.feet + Vector3(0.f, 1.5f, 0.f);
         e.has_head = Shape.has_head;
         return true;
     };
