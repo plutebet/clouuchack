@@ -29,7 +29,7 @@ namespace trigger {
     inline float fire_y = 0.f;
     inline bool fire_set = false;
     inline bool picking = false;
-    inline bool vis_check = false;
+    inline bool vis_check = true;
 }
 
 }
