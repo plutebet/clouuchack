@@ -80,10 +80,30 @@ namespace {
     }
 }
 
+static void draw_dbg(const char* text, int line, ImU32 col = IM_COL32(0,255,0,220)) {
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    if (!dl) return;
+    const float fs = 13.f;
+    const ImVec2 pos(10.f, 60.f + line * 16.f);
+    dl->AddText(nullptr, fs, ImVec2(pos.x+1,pos.y+1), IM_COL32(0,0,0,180), text);
+    dl->AddText(nullptr, fs, pos, col, text);
+}
+
 void rise_visuals::draw() {
     if (!(g_sw >= 2.f) || !(g_sh >= 2.f)) return;
     const bool any = cfg::esp::box || cfg::esp::name || cfg::esp::health;
-    if (!any) return;
+
+    int dbg_line = 0;
+    char dbg[128];
+
+    std::snprintf(dbg, sizeof(dbg), "il2cpp=0x%llx pid=%d",
+        (unsigned long long)rise_game::g_il2cpp_base, rise_game::g_pid);
+    draw_dbg(dbg, dbg_line++);
+
+    if (!any) {
+        draw_dbg("ESP: all toggles OFF", dbg_line++, IM_COL32(255,255,0,220));
+        return;
+    }
 
     crash::stage("rise-render-p");
     const long long now_ms = diag::now_ms();
@@ -95,7 +115,15 @@ void rise_visuals::draw() {
         s_players = rise_game::players();
         s_players_ms = now_ms;
     }
-    if (s_players.empty()) return;
+
+    std::snprintf(dbg, sizeof(dbg), "players=%zu pm=0x%llx",
+        s_players.size(), (unsigned long long)rise_game::g_pm_singleton);
+    draw_dbg(dbg, dbg_line++);
+
+    if (s_players.empty()) {
+        draw_dbg("ESP: no players from PM", dbg_line++, IM_COL32(255,80,80,220));
+        return;
+    }
 
     if (now_ms - g_last_purge > 1000) {
         g_last_purge = now_ms;
@@ -108,16 +136,33 @@ void rise_visuals::draw() {
 
     const rise_game::rise_player* Local = nullptr;
     for (const auto& p : s_players) if (p.is_local) { Local = &p; break; }
-    if (!Local) return;
+    if (!Local) {
+        draw_dbg("ESP: no local player", dbg_line++, IM_COL32(255,80,80,220));
+        return;
+    }
     const uint8_t LocalTeam = Local->team;
-    if (LocalTeam != 1 && LocalTeam != 2) return;
+    std::snprintf(dbg, sizeof(dbg), "local team=%d hp=%d alive=%d",
+        int(LocalTeam), Local->health, int(Local->alive));
+    draw_dbg(dbg, dbg_line++);
+    if (LocalTeam != 1 && LocalTeam != 2) {
+        draw_dbg("ESP: bad local team", dbg_line++, IM_COL32(255,80,80,220));
+        return;
+    }
 
     crash::stage("rise-render-cam");
     matrix ViewMatrix{}, ProjectionMatrix{};
-    if (!rise_game::resolve_camera(ViewMatrix, ProjectionMatrix)) return;
+    const bool cam_ok = rise_game::resolve_camera(ViewMatrix, ProjectionMatrix);
+    std::snprintf(dbg, sizeof(dbg), "camera=%s vm[0]=%.2f pm[5]=%.2f",
+        cam_ok ? "OK" : "FAIL", ViewMatrix.m[0], ProjectionMatrix.m[5]);
+    draw_dbg(dbg, dbg_line++, cam_ok ? IM_COL32(0,255,0,220) : IM_COL32(255,80,80,220));
+    if (!cam_ok) return;
 
     Vector3 LocalPosition{};
-    if (!rise_game::player_position(Local->transform, LocalPosition)) return;
+    const bool pos_ok = rise_game::player_position(Local->transform, LocalPosition);
+    std::snprintf(dbg, sizeof(dbg), "localpos=%s (%.1f,%.1f,%.1f)",
+        pos_ok ? "OK" : "FAIL", LocalPosition.x, LocalPosition.y, LocalPosition.z);
+    draw_dbg(dbg, dbg_line++, pos_ok ? IM_COL32(0,255,0,220) : IM_COL32(255,80,80,220));
+    if (!pos_ok) return;
     if (!std::isfinite(LocalPosition.x) ||
         (LocalPosition.x == 0.f && LocalPosition.y == 0.f && LocalPosition.z == 0.f)) return;
 
@@ -208,6 +253,9 @@ void rise_visuals::draw() {
         if (mx.x < -64.f || mn.x > g_sw + 64.f || mx.y < -64.f || mn.y > g_sh + 64.f) continue;
         items.push_back({mn, mx, cx, &Enemy});
     }
+
+    std::snprintf(dbg, sizeof(dbg), "enemies=%zu projected=%zu", frame_enemies.size(), items.size());
+    draw_dbg(dbg, dbg_line++, items.empty() ? IM_COL32(255,255,0,220) : IM_COL32(0,255,0,220));
 
     std::sort(items.begin(), items.end(),
               [](const draw_item& l, const draw_item& r) { return l.e->distance > r.e->distance; });
