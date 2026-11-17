@@ -303,7 +303,11 @@ inline int get_pid() {
                         if (b > 0) {
                             cmd[b] = '\0';
 
+                            #ifdef RISE_BUILD
+                            const char* tg = oxorany("com.SKITLSE.StandRise");
+                            #else
                             const char* tg = oxorany("com.axlebolt.standoff2");
+                            #endif
                             int tl = 0;
                             while (tg[tl]) tl++;
 
@@ -392,7 +396,11 @@ inline bool elf_soname_is_libunity(uint64_t base) {
     auto name_matches = [&](uint64_t address) {
         char value[160]{};
         if (!mem_read(address, value, sizeof(value) - 1)) return false;
+        #ifdef RISE_BUILD
+        return std::strstr(value, "libil2cpp.so") != nullptr;
+        #else
         return std::strstr(value, "libunity.so") != nullptr;
+        #endif
     };
     // DT_STRTAB is normally a virtual address (load_bias + d_ptr), but some
     // Android linkers expose it already relocated. Accept both forms.
@@ -483,7 +491,12 @@ inline uint64_t get_lib() {
         if (std::sscanf(line, "%llx-%llx %4s %llx", &begin, &end, perms, &file_offset) != 4 ||
             end <= begin || perms[0] != 'r') continue;
         segments.push_back({uint64_t(begin), uint64_t(end), uint64_t(file_offset),
-                            std::strstr(line, "libunity.so") != nullptr});
+                            #ifdef RISE_BUILD
+                            std::strstr(line, "libil2cpp.so") != nullptr
+                            #else
+                            std::strstr(line, "libunity.so") != nullptr
+                            #endif
+                            });
     }
     std::fclose(file);
 
@@ -566,7 +579,11 @@ namespace game {
             proc::pid = get_pid();
             if (proc::pid <= 0) {
                 static long long last_pid_log = 0;
+                #ifdef RISE_BUILD
+                if (diag::every(last_pid_log, 2000)) diag::log("WAIT", "process com.SKITLSE.StandRise not found");
+                #else
                 if (diag::every(last_pid_log, 2000)) diag::log("WAIT", "process com.axlebolt.standoff2 not found");
+                #endif
                 return false;
             }
             diag::log("INFO", "game process found pid=%d", proc::pid);
