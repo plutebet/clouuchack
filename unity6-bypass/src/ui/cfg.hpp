@@ -18,13 +18,17 @@ namespace esp {
     inline ImVec4 team_col = ImVec4(0.3f, 0.6f, 1.f, 1.f);
 }
 
-namespace aim {
+namespace trigger {
     inline bool enabled = false;
-    inline int fov_deg = 15;
-    inline int smooth = 15;
-    inline int priority = 0;
-    inline bool lock_target = true;
-    inline bool back_camera = false;
+    inline float fov = 1.0f;
+    inline int delay_ms = 50;
+    inline int interval_ms = 100;
+    inline int confirm = 2;
+    inline int region = 0;
+    inline float fire_x = 0.f;
+    inline float fire_y = 0.f;
+    inline bool fire_set = false;
+    inline bool picking = false;
 }
 
 }

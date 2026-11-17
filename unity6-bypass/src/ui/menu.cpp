@@ -20,7 +20,6 @@
 #include "Android_draw/draw.h"
 #include "fonts/menu/butterfly.h"
 #include "../other/status.hpp"
-#include "../func/aim.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cfloat>
@@ -340,35 +339,47 @@ namespace ui::menu {
             return false;
         }
 
-        void aim_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
+        void fire_button_row(ImDrawList* dl, const ImVec2& pos, float w, float h, float a, float k, bool live) {
+            text_at(dl, pos, h, c_text, a, "Fire Button");
+            const float bw = 160.f * k, bh = 48.f * k;
+            const ImVec2 bmin(pos.x + w - bw, pos.y + (h - bh) * 0.5f);
+            const ImVec2 bmax(bmin.x + bw, bmin.y + bh);
+            const bool picking = cfg::trigger::picking;
+            dl->AddRectFilled(bmin, bmax, col(picking ? c_green : c_widget, a), 12.f * k);
+            ImFont* f = menu_font();
+            const char* label = picking ? "TAP SCREEN" : (cfg::trigger::fire_set ? "SET" : "PICK");
+            const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.f, label);
+            dl->AddText(f, f->FontSize, ImVec2(bmin.x + (bw - ts.x) * 0.5f, bmin.y + (bh - ts.y) * 0.5f),
+                        col(c_white, a), label);
+            if (live && !g_color_open && tapped(bmin, bmax))
+                cfg::trigger::picking = !cfg::trigger::picking;
+        }
+
+        void trigger_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
             const float pad = k_pad * k, row = k_row * k;
             const float cw = amax.x - amin.x - pad * 2.f;
             ImVec2 c(amin.x + pad, amin.y + pad * 0.5f);
 
-            toggle_row(dl, "Enabled", &cfg::aim::enabled, c, cw, row, a, k, live);
+            toggle_row(dl, "Enabled", &cfg::trigger::enabled, c, cw, row, a, k, live);
             c.y += row;
 
-            int_slider_row(dl, "FOV", &cfg::aim::fov_deg, 1, 90, c, cw, row, a, k, live);
+            fire_button_row(dl, c, cw, row, a, k, live);
             c.y += row;
 
-            int_slider_row(dl, "Smooth", &cfg::aim::smooth, 1, 50, c, cw, row, a, k, live);
-            c.y += row;
-
-            const char* prio_names[] = {"Angle", "Distance", "HP"};
-            segmented(dl, prio_names, 3, &cfg::aim::priority, c, cw, 48.f * k, a, k, live);
+            const char* region_names[] = {"All", "Head", "Body"};
+            segmented(dl, region_names, 3, &cfg::trigger::region, c, cw, 48.f * k, a, k, live);
             c.y += 48.f * k + 16.f * k;
 
-            toggle_row(dl, "Lock Target", &cfg::aim::lock_target, c, cw, row, a, k, live);
+            slider_row(dl, "FOV", &cfg::trigger::fov, 0.2f, 3.0f, c, cw, row, a, k, live);
             c.y += row;
 
-            toggle_row(dl, "Back Camera", &cfg::aim::back_camera, c, cw, row, a, k, live);
+            int_slider_row(dl, "Delay", &cfg::trigger::delay_ms, 0, 300, c, cw, row, a, k, live);
             c.y += row;
 
-            const char* st = aim::state_text();
-            if (st && st[0]) {
-                ImFont* f = menu_font();
-                dl->AddText(f, f->FontSize, ImVec2(c.x, c.y + (row - f->FontSize) * 0.5f), col(c_text_dim, a), st);
-            }
+            int_slider_row(dl, "Interval", &cfg::trigger::interval_ms, 10, 500, c, cw, row, a, k, live);
+            c.y += row;
+
+            int_slider_row(dl, "Confirm", &cfg::trigger::confirm, 1, 4, c, cw, row, a, k, live);
         }
 
     }
@@ -463,7 +474,7 @@ namespace ui::menu {
             g_color_open = false;
         }
 
-        const char* tabs[] = {"Visuals", "Aim", "Unload"};
+        const char* tabs[] = {"Visuals", "Trigger", "Unload"};
         const int tab_count = 3;
         for (int i = 0; i < tab_count; ++i) {
             const ImVec2 tmin(p.x, logo_max.y + k_tab_h * k * float(i)), tmax(p.x + sbw, tmin.y + k_tab_h * k);
@@ -482,7 +493,7 @@ namespace ui::menu {
         const ImVec2 amin(p.x + sbw, p.y), amax(pmax.x, pmax.y);
         dl->PushClipRect(amin, amax, true);
         if (g_tab == 0) visuals_tab(dl, amin, amax, a, k, live);
-        else if (g_tab == 1) aim_tab(dl, amin, amax, a, k, live);
+        else if (g_tab == 1) trigger_tab(dl, amin, amax, a, k, live);
         dl->PopClipRect();
 
         dl->PopClipRect();

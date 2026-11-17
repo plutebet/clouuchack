@@ -6,8 +6,7 @@
 // ================================================================================
 
 #include "visuals.hpp"
-#include "aim.hpp"
-#include "aim_targets.hpp"
+#include "triggerbot.hpp"
 #include "../game/game.hpp"
 #include "../game/math.hpp"
 #include "../game/player.hpp"
@@ -187,7 +186,6 @@ void visuals::draw() {
             last_local = LocalPlayer;
         }
     }
-    aim_targets::set_local(LocalPlayer);
     const int LocalTeam = Local->team;
     if (LocalTeam != 1 && LocalTeam != 2) { esp_wait("local team validation"); return; }
 
@@ -519,23 +517,47 @@ void visuals::draw() {
         if (cfg::esp::weapon) dweapon(Enemy.weapon, it.cx, it.max.y + 3.f, it.max.x - it.min.x, text_sz, fade);
     }
 
-    {
-        std::vector<aim_targets::Target> aim_tgts;
-        aim_tgts.reserve(frame_enemies.size());
-        for (const auto& e : frame_enemies) {
-            ImVec2 sh;
-            if (!world_to_screen(e.head, ViewMatrix, ProjectionMatrix, sh)) continue;
-            aim_targets::Target t;
-            t.x = sh.x; t.y = sh.y;
-            t.distance = e.distance;
-            t.hp = float(e.hp); t.max_hp = float(e.max_hp);
-            t.object = e.object;
-            t.wx = e.head.x; t.wy = e.head.y; t.wz = e.head.z;
-            aim_tgts.push_back(t);
+    // ---- fire-button picking overlay ----
+    if (cfg::trigger::picking) {
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        ImFont* f = espFont ? espFont : ImGui::GetFont();
+        const char* msg = "TAP FIRE BUTTON";
+        const ImVec2 ts = f->CalcTextSizeA(16.f, FLT_MAX, 0.f, msg);
+        fg->AddText(f, 16.f, ImVec2(g_sw * 0.5f - ts.x * 0.5f, g_sh * 0.1f), IM_COL32(255, 80, 80, 220), msg);
+        ImGuiIO& tio = ImGui::GetIO();
+        if (ImGui::IsMouseClicked(0)) {
+            cfg::trigger::fire_x = tio.MousePos.x;
+            cfg::trigger::fire_y = tio.MousePos.y;
+            cfg::trigger::fire_set = true;
+            cfg::trigger::picking = false;
+            diag::log("TRIGGER", "fire position set (%.0f, %.0f)", cfg::trigger::fire_x, cfg::trigger::fire_y);
         }
-        aim_targets::publish(aim_tgts);
     }
-    aim::tick();
+
+    // ---- fire position marker ----
+    if (cfg::trigger::fire_set && cfg::trigger::enabled) {
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        fg->AddCircle(ImVec2(cfg::trigger::fire_x, cfg::trigger::fire_y), 12.f, IM_COL32(255, 60, 60, 160), 16, 2.f);
+        fg->AddLine(ImVec2(cfg::trigger::fire_x - 6.f, cfg::trigger::fire_y),
+                    ImVec2(cfg::trigger::fire_x + 6.f, cfg::trigger::fire_y), IM_COL32(255, 60, 60, 160), 1.5f);
+        fg->AddLine(ImVec2(cfg::trigger::fire_x, cfg::trigger::fire_y - 6.f),
+                    ImVec2(cfg::trigger::fire_x, cfg::trigger::fire_y + 6.f), IM_COL32(255, 60, 60, 160), 1.5f);
+    }
+
+    // ---- triggerbot ----
+    {
+        std::vector<triggerbot::target> trig_tgts;
+        trig_tgts.reserve(frame_enemies.size());
+        for (const auto& e : frame_enemies) {
+            triggerbot::target t;
+            t.id = e.object;
+            t.head = e.head;
+            t.feet = e.position;
+            trig_tgts.push_back(t);
+        }
+        triggerbot::tick(trig_tgts.data(), int(trig_tgts.size()),
+                         ViewMatrix, ProjectionMatrix, now_ms);
+    }
 
     // PROBE (read-only, opt-in): while /data/local/tmp/.sf_probe exists, dumps the szi bytes
     // (Player odq+0x88 -> szi +0x10..+0x1F) of every enemy every 100 ms. A line is logged when the
