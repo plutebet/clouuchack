@@ -2,13 +2,13 @@
 #include <stdint.h>
 
 // Build profile: Standrise 1.0.0F5 (private server of Standoff 2),
-// package com.SKITLSE.StandRise, Unity engine (same il2cpp as SO2).
+// package com.standrise.game, Unity engine (same il2cpp as SO2).
 // Dump: Il2CppDumper on libil2cpp.so from apk 1.0.0F5.
 // TypeInfo RVAs from script.json, field offsets from dump.cs.
 
 namespace rise {
     inline constexpr char profile_name[] = "Standrise-1.0.0F5-arm64";
-    inline constexpr char package_name[] = "com.SKITLSE.StandRise";
+    inline constexpr char package_name[] = "com.standrise.game";
 
     // ---- TypeInfo slots (RVA in libil2cpp.so .data) ----
     inline constexpr uint64_t PlayerManager_TypeInfo         = 0x424AEF0;

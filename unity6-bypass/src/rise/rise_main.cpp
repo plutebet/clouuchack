@@ -75,9 +75,9 @@ static std::string sys_prop(const char* name) {
 }
 
 static void launch_standrise() {
-    int rc = system(oxorany("am start -n com.SKITLSE.StandRise/com.unity3d.player.UnityPlayerActivity >/dev/null 2>&1"));
+    int rc = system(oxorany("am start -n com.standrise.game/com.unity3d.player.UnityPlayerActivity >/dev/null 2>&1"));
     if (rc != 0)
-        rc = system(oxorany("monkey -p com.SKITLSE.StandRise -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1"));
+        rc = system(oxorany("monkey -p com.standrise.game -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1"));
     diag::log(rc == 0 ? "INFO" : "WARN", "game launch exit=%d", rc);
 }
 
@@ -141,7 +141,7 @@ static int run_overlay(const options& opts) {
         so.no_stealth      = opts.no_stealth;
         so.no_namespace    = opts.no_namespace;
         so.no_ptrace_guard = opts.no_ptrace_guard;
-        so.game_pkg        = oxorany("com.SKITLSE.StandRise");
+        so.game_pkg        = oxorany("com.standrise.game");
         so.fake_name       = oxorany("surfaceflinger");
         stealth::init(0, nullptr, so);
     }

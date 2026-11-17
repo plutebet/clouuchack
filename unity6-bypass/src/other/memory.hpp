@@ -304,7 +304,7 @@ inline int get_pid() {
                             cmd[b] = '\0';
 
                             #ifdef RISE_BUILD
-                            const char* tg = oxorany("com.SKITLSE.StandRise");
+                            const char* tg = oxorany("com.standrise.game");
                             #else
                             const char* tg = oxorany("com.axlebolt.standoff2");
                             #endif
@@ -580,7 +580,7 @@ namespace game {
             if (proc::pid <= 0) {
                 static long long last_pid_log = 0;
                 #ifdef RISE_BUILD
-                if (diag::every(last_pid_log, 2000)) diag::log("WAIT", "process com.SKITLSE.StandRise not found");
+                if (diag::every(last_pid_log, 2000)) diag::log("WAIT", "process com.standrise.game not found");
                 #else
                 if (diag::every(last_pid_log, 2000)) diag::log("WAIT", "process com.axlebolt.standoff2 not found");
                 #endif
