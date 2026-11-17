@@ -152,8 +152,8 @@ void rise_visuals::draw() {
     crash::stage("rise-render-cam");
     matrix ViewMatrix{}, ProjectionMatrix{};
     const bool cam_ok = rise_game::resolve_camera(ViewMatrix, ProjectionMatrix);
-    std::snprintf(dbg, sizeof(dbg), "camera=%s vm[0]=%.2f pm[5]=%.2f",
-        cam_ok ? "OK" : "FAIL", ViewMatrix.m[0], ProjectionMatrix.m[5]);
+    std::snprintf(dbg, sizeof(dbg), "camera=%s vm11=%.2f pm22=%.2f",
+        cam_ok ? "OK" : "FAIL", ViewMatrix.m11, ProjectionMatrix.m22);
     draw_dbg(dbg, dbg_line++, cam_ok ? IM_COL32(0,255,0,220) : IM_COL32(255,80,80,220));
     if (!cam_ok) return;
 
