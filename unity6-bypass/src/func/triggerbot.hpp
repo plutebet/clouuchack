@@ -14,6 +14,7 @@ struct target {
     uint64_t id;
     Vector3 head;
     Vector3 feet;
+    bool visible;
 };
 
 inline uint64_t s_tracking = 0;
@@ -44,13 +45,12 @@ inline bool hit_point(const Vector3& point, const matrix& view, const matrix& pr
     float ndc_x = clip.x / depth;
     float ndc_y = clip.y / depth;
     if (!std::isfinite(ndc_x) || !std::isfinite(ndc_y)) return false;
-    if (std::abs(ndc_x) > 1.f || std::abs(ndc_y) > 1.f) return false;
 
     float px = ndc_x * g_sw * 0.5f;
     float py = ndc_y * g_sh * 0.5f;
 
     const float* p = reinterpret_cast<const float*>(&proj);
-    float px_radius = std::clamp(radius * std::abs(p[0]) * g_sw * 0.5f / depth, 1.f, 40.f);
+    float px_radius = std::clamp(radius * std::abs(p[0]) * g_sw * 0.5f / depth, 1.f, g_sw);
     px_radius *= cfg::trigger::fov;
 
     return px * px + py * py <= px_radius * px_radius;
@@ -64,6 +64,8 @@ inline uint64_t plan(const target* targets, int count,
 
     for (int i = 0; i < count; ++i) {
         const target& t = targets[i];
+        if (cfg::esp::visible_check && !t.visible) continue;
+
         for (int part = 0; part < 2; ++part) {
             if (cfg::trigger::region == 1 && part != 0) continue;
             if (cfg::trigger::region == 2 && part != 1) continue;
@@ -112,11 +114,15 @@ inline uint64_t plan(const target* targets, int count,
 inline void tick(const target* targets, int count,
                  const matrix& view, const matrix& proj, long long now_ms) {
     static long long status_log = 0;
-    if (diag::every(status_log, 3000))
-        diag::log("TRIGGER", "status: en=%d fire_set=%d pos=(%.0f,%.0f) tgts=%d pressed=%d fires=%u fd=%d",
+    if (diag::every(status_log, 3000)) {
+        int vis_count = 0;
+        for (int i = 0; i < count; ++i) if (targets[i].visible) ++vis_count;
+        diag::log("TRIGGER", "status: en=%d fire_set=%d pos=(%.0f,%.0f) tgts=%d vis=%d pressed=%d fires=%u fd=%d vc=%d",
                   int(cfg::trigger::enabled), int(cfg::trigger::fire_set),
                   cfg::trigger::fire_x, cfg::trigger::fire_y,
-                  count, int(s_pressed), s_fire_count, inject::g_fd);
+                  count, vis_count, int(s_pressed), s_fire_count, inject::g_fd,
+                  int(cfg::esp::visible_check));
+    }
 
     if (s_pressed && now_ms >= s_release_at) {
         inject::tap_up();

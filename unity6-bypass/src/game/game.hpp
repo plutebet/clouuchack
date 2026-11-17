@@ -803,6 +803,7 @@ struct player_snapshot {
     uint64_t stats{0};           // odq+0x70 ydm
     uint64_t camera_state{0};    // odq+0x78 vqn
     uint8_t view_mode{0};        // odq+0x80 dvp
+    uint64_t szi{0};             // odq+0x88 szi (presentation state, vis candidate)
     uint8_t team{0};             // odq+0x90
     bool is_local() const { return flags[g_local_flag_offset - int(v100::player_local)] != 0; }
 };
@@ -819,6 +820,7 @@ inline bool decode_player_snapshot(uint64_t object, const uint8_t* block, uint64
     std::memcpy(&out.stats, block + v100::player_stats, 8);
     std::memcpy(&out.camera_state, block + v100::player_camera_state, 8);
     out.view_mode = block[v100::player_view_mode];
+    std::memcpy(&out.szi, block + 0x88, 8);
     out.team = block[v100::player_team];
     return out.world != 0;
 }
