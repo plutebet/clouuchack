@@ -57,7 +57,7 @@ namespace ui::menu {
         bool g_panel_dragging = false;
         ImVec2 g_panel_press;
         ImVec2 g_panel_grab;
-        int g_tab = 0;             // 0=Visuals, 1=Trigger
+        int g_tab = 0;
 
         float lrp(float a, float b, float t) { return a + (b - a) * t; }
         ImVec4 lrp_col(const ImVec4& a, const ImVec4& b, float t) {
@@ -306,64 +306,6 @@ namespace ui::menu {
             color_popup(dl, &cfg::esp::box_col, amin, amax, color_y, a, k);
         }
 
-        void fire_button_row(ImDrawList* dl, const ImVec2& pos, float w, float h, float a, float k, bool live) {
-            ImFont* f = menu_font();
-            const char* label = cfg::trigger::fire_set ? "Fire Btn" : "Set Fire";
-            text_at(dl, pos, h, c_text, a, label);
-            const float bw = 160.f * k, bh = 48.f * k;
-            const ImVec2 bmin(pos.x + w - bw, pos.y + (h - bh) * 0.5f);
-            const ImVec2 bmax(bmin.x + bw, bmin.y + bh);
-            const ImVec4& bg = cfg::trigger::fire_set ? c_green : c_widget;
-            dl->AddRectFilled(bmin, bmax, col(bg, a), 12.f * k);
-            char buf[32];
-            if (cfg::trigger::fire_set)
-                std::snprintf(buf, sizeof(buf), "%.0f, %.0f", cfg::trigger::fire_x, cfg::trigger::fire_y);
-            else
-                std::snprintf(buf, sizeof(buf), "Tap...");
-            const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.f, buf);
-            dl->AddText(f, f->FontSize, ImVec2(bmin.x + (bw - ts.x) * 0.5f, bmin.y + (bh - ts.y) * 0.5f),
-                        col(c_white, a), buf);
-            if (live && !g_color_open && tapped(bmin, bmax)) {
-                cfg::trigger::picking = true;
-                bar::close();
-            }
-        }
-
-        void trigger_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
-            const float pad = k_pad * k, row = k_row * k;
-            const float cw = amax.x - amin.x - pad * 2.f;
-            ImVec2 c(amin.x + pad, amin.y + pad * 0.5f);
-
-            toggle_row(dl, "Enabled", &cfg::trigger::enabled, c, cw, row, a, k, live);
-            c.y += row;
-
-            fire_button_row(dl, c, cw, row, a, k, live);
-            c.y += row;
-
-            static const char* regions[] = {"All", "Head", "Body"};
-            segmented(dl, regions, 3, &cfg::trigger::region, c, cw, 48.f * k, a, k, live);
-            c.y += 48.f * k + 16.f * k;
-
-            static float fov_f = cfg::trigger::fov;
-            slider_row(dl, "FOV", &fov_f, 0.5f, 3.0f, c, cw, row, a, k, live);
-            cfg::trigger::fov = fov_f;
-            c.y += row;
-
-            static float delay_f = static_cast<float>(cfg::trigger::delay_ms);
-            slider_row(dl, "Delay", &delay_f, 0.f, 300.f, c, cw, row, a, k, live);
-            cfg::trigger::delay_ms = static_cast<int>(delay_f);
-            c.y += row;
-
-            static float interval_f = static_cast<float>(cfg::trigger::interval_ms);
-            slider_row(dl, "Interval", &interval_f, 10.f, 500.f, c, cw, row, a, k, live);
-            cfg::trigger::interval_ms = static_cast<int>(interval_f);
-            c.y += row;
-
-            static float confirm_f = static_cast<float>(cfg::trigger::confirm);
-            slider_row(dl, "Confirm", &confirm_f, 1.f, 4.f, c, cw, row, a, k, live);
-            cfg::trigger::confirm = static_cast<int>(confirm_f);
-        }
-
     }
 
     void render() {
@@ -456,8 +398,8 @@ namespace ui::menu {
             g_color_open = false;
         }
 
-        const char* tabs[] = {"Visuals", "Trigger", "Unload"};
-        const int tab_count = 3;
+        const char* tabs[] = {"Visuals", "Unload"};
+        const int tab_count = 2;
         for (int i = 0; i < tab_count; ++i) {
             const ImVec2 tmin(p.x, logo_max.y + k_tab_h * k * float(i)), tmax(p.x + sbw, tmin.y + k_tab_h * k);
             if (i == tab_count - 1 && live && tapped(tmin, tmax)) status::g_quit_request = true;
@@ -474,8 +416,7 @@ namespace ui::menu {
         // ---- content ----
         const ImVec2 amin(p.x + sbw, p.y), amax(pmax.x, pmax.y);
         dl->PushClipRect(amin, amax, true);
-        if (g_tab == 0) visuals_tab(dl, amin, amax, a, k, live);
-        else if (g_tab == 1) trigger_tab(dl, amin, amax, a, k, live);
+        visuals_tab(dl, amin, amax, a, k, live);
         dl->PopClipRect();
 
         dl->PopClipRect();

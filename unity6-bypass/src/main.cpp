@@ -18,7 +18,6 @@
 #include "game/game.hpp"
 #include "game/camera.hpp"
 #include "func/visuals.hpp"
-#include "other/touch_inject.hpp"
 #include "protect/oxorany.hpp"
 #include <cstdio>
 #include <cstring>
@@ -247,11 +246,6 @@ static int run_overlay(const options& opts) {
     if (!touch::init(max_size, min_size, (uint8_t)displayInfo.orientation))
         diag::log("WARN", "no touch device readable in /dev/input; menu cannot be operated");
 
-    if (inject::init(max_size, min_size, (uint8_t)displayInfo.orientation))
-        diag::log("INFO", "touch injector initialized (%dx%d)", max_size, min_size);
-    else
-        diag::log("WARN", "touch injector failed (no writable touchscreen); triggerbot disabled");
-
     print_status(oxorany("Game detect ..."));
     if (!opts.no_launch && get_pid() <= 0) launch_standoff();
 
@@ -388,7 +382,6 @@ static int run_overlay(const options& opts) {
     crash::stage("shutdown");
     diag::log("INFO", "shutting down (code=%d)", exit_code);
     scanner::stop();
-    inject::shutdown();
     // No touch / ImGui / EGL teardown here: every caller _exit()s right after
     // this returns, which drops the overlay layer. The teardown raced the
     // detached touch threads, which still hold ImGuiIO pointers.

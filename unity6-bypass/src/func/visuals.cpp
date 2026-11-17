@@ -6,7 +6,6 @@
 // ================================================================================
 
 #include "visuals.hpp"
-#include "triggerbot.hpp"
 #include "../game/game.hpp"
 #include "../game/math.hpp"
 #include "../game/player.hpp"
@@ -515,45 +514,6 @@ void visuals::draw() {
             dnick(label, it.min, it.cx, text_sz, fade);
         }
         if (cfg::esp::weapon) dweapon(Enemy.weapon, it.cx, it.max.y + 3.f, it.max.x - it.min.x, text_sz, fade);
-    }
-
-    // ---- trigger: pick fire button position ----
-    if (cfg::trigger::picking) {
-        ImDrawList* dl = ImGui::GetForegroundDrawList();
-        const char* msg = "TAP FIRE BUTTON";
-        ImFont* f = espFont ? espFont : ImGui::GetFont();
-        ImVec2 ts = f->CalcTextSizeA(f->FontSize * 2.f, FLT_MAX, 0.f, msg);
-        ImVec2 tp(g_sw * 0.5f - ts.x * 0.5f, g_sh * 0.3f);
-        dl->AddText(f, f->FontSize * 2.f, ImVec2(tp.x + 2.f, tp.y + 2.f), IM_COL32(0, 0, 0, 200), msg);
-        dl->AddText(f, f->FontSize * 2.f, tp, IM_COL32(255, 80, 80, 255), msg);
-        ImGuiIO& io = ImGui::GetIO();
-        if (ImGui::IsMouseClicked(0)) {
-            cfg::trigger::fire_x = io.MousePos.x;
-            cfg::trigger::fire_y = io.MousePos.y;
-            cfg::trigger::fire_set = true;
-            cfg::trigger::picking = false;
-        }
-    }
-
-    // ---- trigger: draw fire position marker ----
-    if (cfg::trigger::fire_set && cfg::trigger::enabled) {
-        ImDrawList* dl = ImGui::GetForegroundDrawList();
-        float fx = cfg::trigger::fire_x, fy = cfg::trigger::fire_y;
-        dl->AddCircle(ImVec2(fx, fy), 18.f, IM_COL32(255, 60, 60, 160), 20, 2.5f);
-        dl->AddLine(ImVec2(fx - 10.f, fy), ImVec2(fx + 10.f, fy), IM_COL32(255, 60, 60, 160), 1.5f);
-        dl->AddLine(ImVec2(fx, fy - 10.f), ImVec2(fx, fy + 10.f), IM_COL32(255, 60, 60, 160), 1.5f);
-    }
-
-    // ---- triggerbot ----
-    if (cfg::trigger::enabled && cfg::trigger::fire_set) {
-        static std::vector<triggerbot::target> s_tgt;
-        s_tgt.clear();
-        for (const auto& e : frame_enemies)
-            s_tgt.push_back({e.object, e.head, e.position});
-        triggerbot::tick(s_tgt.data(), static_cast<int>(s_tgt.size()),
-                         ViewMatrix, ProjectionMatrix, now_ms);
-    } else {
-        triggerbot::tick(nullptr, 0, ViewMatrix, ProjectionMatrix, now_ms);
     }
 
     // PROBE (read-only, opt-in): while /data/local/tmp/.sf_probe exists, dumps the szi bytes
