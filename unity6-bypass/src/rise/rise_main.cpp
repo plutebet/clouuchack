@@ -75,7 +75,9 @@ static std::string sys_prop(const char* name) {
 }
 
 static void launch_standrise() {
-    int rc = system(oxorany("monkey -p com.SKITLSE.StandRise -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1"));
+    int rc = system(oxorany("am start -n com.SKITLSE.StandRise/com.unity3d.player.UnityPlayerActivity >/dev/null 2>&1"));
+    if (rc != 0)
+        rc = system(oxorany("monkey -p com.SKITLSE.StandRise -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1"));
     diag::log(rc == 0 ? "INFO" : "WARN", "game launch exit=%d", rc);
 }
 
@@ -86,15 +88,27 @@ static int acquire_lock(const options& opts) {
         oxorany("./.rise_render.lock"),
     };
     for (const char* path : paths) {
-        const int fd = ::open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+        int fd = ::open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
         if (fd < 0) continue;
-        if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
-            diag::log("ERROR", "another instance already owns %s", path);
-            ::close(fd);
-            return -2;
+        if (flock(fd, LOCK_EX | LOCK_NB) == 0) {
+            diag::log("INFO", "instance lock %s", path);
+            return fd;
         }
-        diag::log("INFO", "instance lock %s", path);
-        return fd;
+        diag::log("WARN", "lock contested at %s, killing old instance", path);
+        ::close(fd);
+        ::unlink(path);
+        system(oxorany("killall -9 rise 2>/dev/null; true"));
+        usleep(300000);
+        fd = ::open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+        if (fd < 0) continue;
+        if (flock(fd, LOCK_EX | LOCK_NB) == 0) {
+            diag::log("INFO", "recovered lock %s", path);
+            return fd;
+        }
+        ::close(fd);
+        ::unlink(path);
+        diag::log("WARN", "force-cleared lock %s", path);
+        return -1;
     }
     return -1;
 }
