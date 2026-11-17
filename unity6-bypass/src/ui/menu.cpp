@@ -306,12 +306,38 @@ namespace ui::menu {
             color_popup(dl, &cfg::esp::box_col, amin, amax, color_y, a, k);
         }
 
+        void fire_button_row(ImDrawList* dl, const ImVec2& pos, float w, float h, float a, float k, bool live) {
+            ImFont* f = menu_font();
+            const char* label = cfg::trigger::fire_set ? "Fire Btn" : "Set Fire";
+            text_at(dl, pos, h, c_text, a, label);
+            const float bw = 160.f * k, bh = 48.f * k;
+            const ImVec2 bmin(pos.x + w - bw, pos.y + (h - bh) * 0.5f);
+            const ImVec2 bmax(bmin.x + bw, bmin.y + bh);
+            const ImVec4& bg = cfg::trigger::fire_set ? c_green : c_widget;
+            dl->AddRectFilled(bmin, bmax, col(bg, a), 12.f * k);
+            char buf[32];
+            if (cfg::trigger::fire_set)
+                std::snprintf(buf, sizeof(buf), "%.0f, %.0f", cfg::trigger::fire_x, cfg::trigger::fire_y);
+            else
+                std::snprintf(buf, sizeof(buf), "Tap...");
+            const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.f, buf);
+            dl->AddText(f, f->FontSize, ImVec2(bmin.x + (bw - ts.x) * 0.5f, bmin.y + (bh - ts.y) * 0.5f),
+                        col(c_white, a), buf);
+            if (live && !g_color_open && tapped(bmin, bmax)) {
+                cfg::trigger::picking = true;
+                bar::close();
+            }
+        }
+
         void trigger_tab(ImDrawList* dl, const ImVec2& amin, const ImVec2& amax, float a, float k, bool live) {
             const float pad = k_pad * k, row = k_row * k;
             const float cw = amax.x - amin.x - pad * 2.f;
             ImVec2 c(amin.x + pad, amin.y + pad * 0.5f);
 
             toggle_row(dl, "Enabled", &cfg::trigger::enabled, c, cw, row, a, k, live);
+            c.y += row;
+
+            fire_button_row(dl, c, cw, row, a, k, live);
             c.y += row;
 
             static const char* regions[] = {"All", "Head", "Body"};

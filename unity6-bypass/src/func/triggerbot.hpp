@@ -123,7 +123,7 @@ inline void tick(const target* targets, int count,
     uint64_t id = plan(targets, count, view, proj, now_ms);
     if (!id) return;
 
-    inject::tap_down(g_sw * 0.5f, g_sh * 0.5f);
+    inject::tap_down(cfg::trigger::fire_x, cfg::trigger::fire_y);
     s_pressed = true;
     s_release_at = now_ms + 16;
 
