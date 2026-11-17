@@ -17,14 +17,15 @@ struct target {
 };
 
 inline uint64_t s_tracking = 0;
-inline uint64_t s_since = 0;
+inline long long s_since = 0;
 inline uint32_t s_confirmed = 0;
 inline uint32_t s_last_confirm_seq = 0;
-inline uint64_t s_next_shot = 0;
+inline long long s_next_shot = 0;
 inline uint32_t s_last_shot_seq = 0;
 inline uint32_t s_seq = 0;
 inline bool s_pressed = false;
 inline long long s_release_at = 0;
+inline uint32_t s_fire_count = 0;
 
 inline void reset() {
     s_tracking = 0;
@@ -40,16 +41,19 @@ inline bool hit_point(const Vector3& point, const matrix& view, const matrix& pr
     depth = clip.w;
     if (!std::isfinite(depth) || depth < 0.05f) return false;
 
-    float x = clip.x / depth * g_sw * 0.5f;
-    float y = clip.y / depth * g_sh * 0.5f;
-    if (!std::isfinite(x) || !std::isfinite(y)) return false;
-    if (std::abs(x) > g_sw * 0.5f - 2.f || std::abs(y) > g_sh * 0.5f - 2.f) return false;
+    float ndc_x = clip.x / depth;
+    float ndc_y = clip.y / depth;
+    if (!std::isfinite(ndc_x) || !std::isfinite(ndc_y)) return false;
+    if (std::abs(ndc_x) > 1.f || std::abs(ndc_y) > 1.f) return false;
+
+    float px = ndc_x * g_sw * 0.5f;
+    float py = ndc_y * g_sh * 0.5f;
 
     const float* p = reinterpret_cast<const float*>(&proj);
-    float pixels = std::clamp(radius * std::abs(p[0]) * g_sw * 0.5f / depth, 0.25f, 16.f);
-    pixels *= cfg::trigger::fov;
+    float px_radius = std::clamp(radius * std::abs(p[0]) * g_sw * 0.5f / depth, 1.f, 40.f);
+    px_radius *= cfg::trigger::fov;
 
-    return x * x + y * y <= pixels * pixels;
+    return px * px + py * py <= px_radius * px_radius;
 }
 
 inline uint64_t plan(const target* targets, int count,
@@ -68,7 +72,7 @@ inline uint64_t plan(const target* targets, int count,
             Vector3 point = part == 0
                 ? t.head
                 : t.feet + (t.head - t.feet) * 0.65f;
-            float radius = part == 0 ? 0.09f : 0.16f;
+            float radius = part == 0 ? 0.12f : 0.20f;
 
             if (hit_point(point, view, proj, radius, depth) && depth < best) {
                 best = depth;
@@ -97,7 +101,7 @@ inline uint64_t plan(const target* targets, int count,
 
     if (s_confirmed < need) return 0;
     if (now_ms - s_since < delay) return 0;
-    if (now_ms < static_cast<long long>(s_next_shot)) return 0;
+    if (now_ms < s_next_shot) return 0;
     if (s_last_shot_seq == s_seq) return 0;
 
     s_next_shot = now_ms + interval;
@@ -107,6 +111,13 @@ inline uint64_t plan(const target* targets, int count,
 
 inline void tick(const target* targets, int count,
                  const matrix& view, const matrix& proj, long long now_ms) {
+    static long long status_log = 0;
+    if (diag::every(status_log, 3000))
+        diag::log("TRIGGER", "status: en=%d fire_set=%d pos=(%.0f,%.0f) tgts=%d pressed=%d fires=%u fd=%d",
+                  int(cfg::trigger::enabled), int(cfg::trigger::fire_set),
+                  cfg::trigger::fire_x, cfg::trigger::fire_y,
+                  count, int(s_pressed), s_fire_count, inject::g_fd);
+
     if (s_pressed && now_ms >= s_release_at) {
         inject::tap_up();
         s_pressed = false;
@@ -118,6 +129,8 @@ inline void tick(const target* targets, int count,
         return;
     }
 
+    if (!cfg::trigger::fire_set) return;
+
     if (s_pressed) return;
 
     uint64_t id = plan(targets, count, view, proj, now_ms);
@@ -125,12 +138,12 @@ inline void tick(const target* targets, int count,
 
     inject::tap_down(cfg::trigger::fire_x, cfg::trigger::fire_y);
     s_pressed = true;
-    s_release_at = now_ms + 16;
+    s_release_at = now_ms + 60;
+    ++s_fire_count;
 
-    static long long fire_log = 0;
-    if (diag::every(fire_log, 500))
-        diag::log("TRIGGER", "fire target=0x%llx confirmed=%u",
-                  (unsigned long long)id, s_confirmed);
+    diag::log("TRIGGER", "fire #%u target=0x%llx confirmed=%u pos=(%.0f,%.0f)",
+              s_fire_count, (unsigned long long)id, s_confirmed,
+              cfg::trigger::fire_x, cfg::trigger::fire_y);
 }
 
 }

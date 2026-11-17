@@ -246,7 +246,6 @@ static int run_overlay(const options& opts) {
 
     if (!touch::init(max_size, min_size, (uint8_t)displayInfo.orientation))
         diag::log("WARN", "no touch device readable in /dev/input; menu cannot be operated");
-
     if (!inject::init(max_size, min_size, (uint8_t)displayInfo.orientation))
         diag::log("WARN", "no writable touch device in /dev/input; triggerbot cannot fire");
 
