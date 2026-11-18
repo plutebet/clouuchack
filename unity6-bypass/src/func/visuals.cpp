@@ -544,7 +544,7 @@ void visuals::draw() {
                     ImVec2(cfg::trigger::fire_x, cfg::trigger::fire_y + 6.f), IM_COL32(255, 60, 60, 160), 1.5f);
     }
 
-    // ---- triggerbot with damage-feedback vis check ----
+    // ---- triggerbot with damage-feedback vis check + szi scan ----
     {
         std::vector<triggerbot::target> trig_tgts;
         trig_tgts.reserve(frame_enemies.size());
@@ -555,10 +555,30 @@ void visuals::draw() {
             t.feet = e.position;
             t.hp = e.hp;
             t.max_hp = e.max_hp;
+            t.szi_ok = false;
+            std::memset(t.szi, 0, sizeof(t.szi));
+            if (e.snap) {
+                const uint64_t szi = untag(e.snap->szi);
+                if (obj_ptr(szi))
+                    t.szi_ok = mem_read(szi + 0x10, t.szi, 32);
+            }
             trig_tgts.push_back(t);
         }
         triggerbot::tick(trig_tgts.data(), int(trig_tgts.size()),
                          ViewMatrix, ProjectionMatrix, now_ms);
+
+        // periodic szi dump for all enemies (vis-byte discovery)
+        static long long vscan_log = 0;
+        if (diag::every(vscan_log, 2000) && !trig_tgts.empty()) {
+            for (const auto& t : trig_tgts) {
+                if (!t.szi_ok) continue;
+                char hex[32 * 3 + 1] = {0};
+                for (int j = 0; j < 32; ++j)
+                    std::snprintf(hex + j * 3, 4, "%02x ", t.szi[j]);
+                diag::log("VSCAN2", "id=0x%llx hp=%d szi=[%s]",
+                          (unsigned long long)t.id, t.hp, hex);
+            }
+        }
     }
 
     static long long frame_log = 0;

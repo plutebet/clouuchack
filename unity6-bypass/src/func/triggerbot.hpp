@@ -17,19 +17,21 @@ struct target {
     Vector3 feet;
     int hp;
     int max_hp;
+    uint8_t szi[32];   // szi+0x10..+0x2F for vis scan
+    bool szi_ok;
 };
 
 // ---- damage-feedback wall detection ----
 inline std::unordered_map<uint64_t, long long> s_wall; // id -> unblock time
-inline uint64_t s_wt_id = 0;      // target being tracked
-inline int      s_wt_hp = 0;      // HP when tracking started
-inline uint32_t s_wt_fires = 0;   // fires since tracking started
-inline long long s_wt_first = 0;  // time of first fire
-inline long long s_wt_last = 0;   // time of last fire
+inline uint64_t s_wt_id = 0;
+inline int      s_wt_hp = 0;
+inline uint32_t s_wt_fires = 0;
+inline long long s_wt_first = 0;
+inline long long s_wt_last = 0;
 inline uint32_t s_wall_blocks = 0;
 
-static constexpr uint32_t kWallFires = 5;
-static constexpr long long kWallTimeMs = 400;
+static constexpr uint32_t kWallFires = 3;
+static constexpr long long kWallTimeMs = 250;
 static constexpr long long kWallCooldownMs = 1500;
 static constexpr long long kWallStaleMs = 2000;
 
@@ -97,11 +99,9 @@ inline bool hit_capsule(const Vector3& head, const Vector3& feet,
     float len2 = dx * dx + dy * dy;
     float height = std::sqrt(len2);
 
-    // half-width ≈ 20% of screen height (player ~0.5m wide, ~1.8m tall)
     float half_w = std::clamp(height * 0.20f, 6.f, g_sw * 0.5f);
     half_w *= cfg::trigger::fov;
 
-    // distance from crosshair (0,0) to line segment [head, feet] in screen px
     float t = len2 > 0.001f ? std::clamp((-hx * dx + -hy * dy) / len2, 0.f, 1.f) : 0.f;
     float cx = hx + t * dx;
     float cy = hy + t * dy;
@@ -117,7 +117,6 @@ inline uint64_t plan(const target* targets, int count,
     uint64_t chosen = 0;
     float best = 1e9f;
 
-    // clean expired blacklist
     if (cfg::trigger::vis_check) {
         for (auto it = s_wall.begin(); it != s_wall.end(); )
             if (now_ms >= it->second) it = s_wall.erase(it); else ++it;
@@ -132,14 +131,11 @@ inline uint64_t plan(const target* targets, int count,
         float depth = 0.f;
 
         if (cfg::trigger::region == 1) {
-            // head only
             hit = hit_point(t.head, view, proj, 0.14f, depth);
         } else if (cfg::trigger::region == 2) {
-            // body only
             Vector3 body = t.feet + (t.head - t.feet) * 0.65f;
             hit = hit_point(body, view, proj, 0.25f, depth);
         } else {
-            // full body capsule
             hit = hit_capsule(t.head, t.feet, view, proj, depth);
         }
 
@@ -208,12 +204,12 @@ inline void tick(const target* targets, int count,
     if (!id) return;
 
     // ---- damage-feedback wall check ----
-    if (cfg::trigger::vis_check) {
-        int hp = 0;
-        for (int i = 0; i < count; ++i)
-            if (targets[i].id == id) { hp = targets[i].hp; break; }
+    int hp = 0;
+    const target* tgt = nullptr;
+    for (int i = 0; i < count; ++i)
+        if (targets[i].id == id) { hp = targets[i].hp; tgt = &targets[i]; break; }
 
-        // new target or stale tracker: start fresh
+    if (cfg::trigger::vis_check) {
         if (id != s_wt_id || (s_wt_fires > 0 && now_ms - s_wt_last > kWallStaleMs)) {
             s_wt_id = id;
             s_wt_hp = hp;
@@ -221,7 +217,6 @@ inline void tick(const target* targets, int count,
             s_wt_first = now_ms;
         }
 
-        // HP dropped since tracking started: shots are landing
         if (hp < s_wt_hp && hp > 0) {
             s_wt_hp = hp;
             s_wt_fires = 0;
@@ -229,7 +224,6 @@ inline void tick(const target* targets, int count,
             s_wall.erase(id);
         }
 
-        // wall condition: enough fires, enough time, HP unchanged
         if (s_wt_fires >= kWallFires &&
             now_ms - s_wt_first >= kWallTimeMs &&
             hp >= s_wt_hp) {
@@ -253,10 +247,15 @@ inline void tick(const target* targets, int count,
     s_release_at = now_ms + 30;
     ++s_fire_count;
 
-    diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d conf=%u pos=(%.0f,%.0f) wf=%u",
-              s_fire_count, (unsigned long long)id,
-              [&]{ for (int i = 0; i < count; ++i) if (targets[i].id == id) return targets[i].hp; return 0; }(),
-              s_confirmed, cfg::trigger::fire_x, cfg::trigger::fire_y, s_wt_fires);
+    // fire log with szi hex dump for vis-byte discovery
+    char szi_hex[32 * 3 + 1] = {0};
+    if (tgt && tgt->szi_ok) {
+        for (int j = 0; j < 32; ++j)
+            std::snprintf(szi_hex + j * 3, 4, "%02x ", tgt->szi[j]);
+    }
+    diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d conf=%u wf=%u szi=[%s]",
+              s_fire_count, (unsigned long long)id, hp, s_confirmed, s_wt_fires,
+              tgt && tgt->szi_ok ? szi_hex : "N/A");
 }
 
 }
