@@ -17,8 +17,14 @@ struct target {
     Vector3 feet;
     int hp;
     int max_hp;
-    uint8_t szi_wide[96]; // szi+0x00..+0x5F (wider scan)
+    uint8_t szi_wide[256];     // szi+0x00..+0xFF (256 bytes)
     bool szi_ok;
+    uint8_t odq_ext[64];       // player+0x98..+0xD7 (beyond known fields)
+    bool ext_ok;
+    uint8_t chc_data[128];     // presentation component chc+0x00..+0x7F
+    bool chc_ok;
+    uint8_t anim_data[176];    // PlayerAnimationData +0x00..+0xAF
+    bool anim_ok;
 };
 
 // ---- probe-and-observe wall detection ----
@@ -263,15 +269,8 @@ inline void tick(const target* targets, int count,
     s_release_at = now_ms + 30;
     ++s_fire_count;
 
-    // fire log with wide szi hex for vis-byte discovery
-    char szi_hex[96 * 3 + 1] = {0};
-    if (tgt && tgt->szi_ok) {
-        for (int j = 0; j < 96; ++j)
-            std::snprintf(szi_hex + j * 3, 4, "%02x ", tgt->szi_wide[j]);
-    }
-    diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d conf=%u wf=%u vis=%d szi=[%s]",
-              s_fire_count, (unsigned long long)id, hp, s_confirmed, s_wt_fires, int(s_wt_vis),
-              tgt && tgt->szi_ok ? szi_hex : "N/A");
+    diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d conf=%u wf=%u vis=%d",
+              s_fire_count, (unsigned long long)id, hp, s_confirmed, s_wt_fires, int(s_wt_vis));
 }
 
 }

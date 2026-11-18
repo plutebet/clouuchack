@@ -544,39 +544,104 @@ void visuals::draw() {
                     ImVec2(cfg::trigger::fire_x, cfg::trigger::fire_y + 6.f), IM_COL32(255, 60, 60, 160), 1.5f);
     }
 
-    // ---- triggerbot with damage-feedback vis check + szi scan ----
+    // ---- triggerbot with damage-feedback vis check + wide structure scan ----
     {
+        static std::unordered_map<uint64_t, uint64_t> s_chc_cache; // enemy id -> chc ptr
+        const uint64_t chc_class = typeinfo(v100::presentation_typeinfo);
+
         std::vector<triggerbot::target> trig_tgts;
         trig_tgts.reserve(frame_enemies.size());
         for (const auto& e : frame_enemies) {
-            triggerbot::target t;
+            triggerbot::target t{};
             t.id = e.object;
             t.head = e.head;
             t.feet = e.position;
             t.hp = e.hp;
             t.max_hp = e.max_hp;
-            t.szi_ok = false;
-            std::memset(t.szi_wide, 0, sizeof(t.szi_wide));
+
+            // szi: read 256 bytes (extended from 96)
             if (e.snap) {
                 const uint64_t szi = untag(e.snap->szi);
                 if (obj_ptr(szi))
-                    t.szi_ok = mem_read(szi, t.szi_wide, 96);
+                    t.szi_ok = mem_read(szi, t.szi_wide, 256);
             }
+
+            // odq extended: player+0x98..+0xD7
+            t.ext_ok = mem_read(e.object + 0x98, t.odq_ext, 64);
+
+            // presentation component (chc): find via component walk, cached
+            auto it = s_chc_cache.find(e.object);
+            uint64_t chc = 0;
+            if (it != s_chc_cache.end() && exact_class(it->second, chc_class))
+                chc = it->second;
+            else {
+                chc = find_player_component(e.object, chc_class);
+                if (chc) s_chc_cache[e.object] = chc;
+            }
+            if (obj_ptr(chc))
+                t.chc_ok = mem_read(chc, t.chc_data, 128);
+            // read PlayerAnimationData directly from chc+0xA0
+            if (obj_ptr(chc)) {
+                const uint64_t anim = untag(rpm<uint64_t>(chc + v100::presentation_animation_data));
+                if (obj_ptr(anim))
+                    t.anim_ok = mem_read(anim, t.anim_data, 176);
+            }
+
             trig_tgts.push_back(t);
         }
+
+        // clean stale chc cache entries
+        for (auto ci = s_chc_cache.begin(); ci != s_chc_cache.end(); ) {
+            bool found = false;
+            for (const auto& e : frame_enemies)
+                if (e.object == ci->first) { found = true; break; }
+            if (!found) ci = s_chc_cache.erase(ci); else ++ci;
+        }
+
         triggerbot::tick(trig_tgts.data(), int(trig_tgts.size()),
                          ViewMatrix, ProjectionMatrix, now_ms);
 
-        // periodic wide szi dump for vis-byte discovery (96 bytes from szi+0x00)
+        // VSCAN4: periodic wide dump for vis-byte discovery
+        // Tag each with wall detection state: W=wall-blacklisted, V=confirmed-visible, ?=unknown
         static long long vscan_log = 0;
         if (diag::every(vscan_log, 2000) && !trig_tgts.empty()) {
             for (const auto& t : trig_tgts) {
-                if (!t.szi_ok) continue;
-                char hex[96 * 3 + 1] = {0};
-                for (int j = 0; j < 96; ++j)
-                    std::snprintf(hex + j * 3, 4, "%02x ", t.szi_wide[j]);
-                diag::log("VSCAN3", "id=0x%llx hp=%d szi=[%s]",
-                          (unsigned long long)t.id, t.hp, hex);
+                char vis_tag = '?';
+                if (triggerbot::s_wall.count(t.id)) vis_tag = 'W';
+                else if (triggerbot::s_wt_id == t.id && triggerbot::s_wt_vis) vis_tag = 'V';
+
+                // szi 256 bytes
+                if (t.szi_ok) {
+                    char hex[256 * 3 + 1] = {0};
+                    for (int j = 0; j < 256; ++j)
+                        std::snprintf(hex + j * 3, 4, "%02x ", t.szi_wide[j]);
+                    diag::log("VSCAN4", "id=0x%llx hp=%d vis=%c src=szi data=[%s]",
+                              (unsigned long long)t.id, t.hp, vis_tag, hex);
+                }
+                // odq extended 64 bytes
+                if (t.ext_ok) {
+                    char hex[64 * 3 + 1] = {0};
+                    for (int j = 0; j < 64; ++j)
+                        std::snprintf(hex + j * 3, 4, "%02x ", t.odq_ext[j]);
+                    diag::log("VSCAN4", "id=0x%llx hp=%d vis=%c src=odx data=[%s]",
+                              (unsigned long long)t.id, t.hp, vis_tag, hex);
+                }
+                // chc 128 bytes
+                if (t.chc_ok) {
+                    char hex[128 * 3 + 1] = {0};
+                    for (int j = 0; j < 128; ++j)
+                        std::snprintf(hex + j * 3, 4, "%02x ", t.chc_data[j]);
+                    diag::log("VSCAN4", "id=0x%llx hp=%d vis=%c src=chc data=[%s]",
+                              (unsigned long long)t.id, t.hp, vis_tag, hex);
+                }
+                // PlayerAnimationData 176 bytes
+                if (t.anim_ok) {
+                    char hex[176 * 3 + 1] = {0};
+                    for (int j = 0; j < 176; ++j)
+                        std::snprintf(hex + j * 3, 4, "%02x ", t.anim_data[j]);
+                    diag::log("VSCAN4", "id=0x%llx hp=%d vis=%c src=anim data=[%s]",
+                              (unsigned long long)t.id, t.hp, vis_tag, hex);
+                }
             }
         }
     }
