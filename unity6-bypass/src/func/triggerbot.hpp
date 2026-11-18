@@ -37,9 +37,9 @@ inline long long s_wt_last = 0;
 inline bool     s_wt_vis = false;  // confirmed visible (HP dropped)
 inline uint32_t s_wall_blocks = 0;
 
-static constexpr uint32_t kProbeShots  = 3;     // fire 3 initial shots
-static constexpr long long kProbeWaitMs = 500;   // then observe 500ms for HP drop
-static constexpr long long kWallCooldownMs = 1500;
+static constexpr uint32_t kProbeShots  = 1;     // fire 1 probe shot
+static constexpr long long kProbeWaitMs = 300;   // then observe 300ms for HP drop
+static constexpr long long kWallCooldownMs = 1200;
 static constexpr long long kWallStaleMs = 2000;
 
 // ---- core state ----
@@ -254,7 +254,7 @@ inline void tick(const target* targets, int count,
         }
 
         // re-probe after burst of confirmed-visible shots with no new HP drop
-        if (s_wt_vis && s_wt_fires >= kProbeShots * 2) {
+        if (s_wt_vis && s_wt_fires >= 6) {
             s_wt_vis = false;
             s_wt_fires = kProbeShots; // force observe
             s_wt_first = now_ms - kProbeWaitMs + 100; // short grace
