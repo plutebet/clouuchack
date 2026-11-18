@@ -933,11 +933,12 @@ namespace player {
         bool has(int bone) const { return bone >= 0 && bone < kBoneCount && (mask & (1u << bone)) != 0; }
     };
 
-    // Per-player bone cache: bis and dictionary pointers change rarely, resolve at 10 Hz.
     struct bone_cache_entry {
-        uint64_t bis{0};
-        long long refreshed_ms{0};
-        BoneData data{};
+        BoneData prev{};
+        BoneData cur{};
+        long long prev_ms{0};
+        long long cur_ms{0};
+        bool has_prev{false};
     };
     inline std::unordered_map<uint64_t, bone_cache_entry> g_bone_cache;
 
@@ -1018,22 +1019,38 @@ namespace player {
     }
 
     inline BoneData cached_bones(uint64_t player, long long now_ms) {
-        auto it = g_bone_cache.find(player);
-        if (it != g_bone_cache.end()) {
-            const int have = __builtin_popcount(it->second.data.mask);
-            const long long ttl = have >= kBoneCount ? 100 : (have > 0 ? 20 : 0);
-            if (now_ms - it->second.refreshed_ms < ttl)
-                return it->second.data;
-        }
         bone_cache_entry& entry = g_bone_cache[player];
-        entry.refreshed_ms = now_ms;
-        read_bones(player, entry.data);
-        static long long bone_log = 0;
-        if (diag::every(bone_log, 5000))
-            diag::log("BONES", "player=0x%llx mask=0x%x head=%d count=%d",
-                      (unsigned long long)player, entry.data.mask, entry.data.has_head() ? 1 : 0,
-                      __builtin_popcount(entry.data.mask));
-        return entry.data;
+        const int have = __builtin_popcount(entry.cur.mask);
+        const long long ttl = have >= kBoneCount ? 50 : (have > 0 ? 16 : 0);
+        if (now_ms - entry.cur_ms >= ttl) {
+            if (entry.cur.mask) {
+                entry.prev = entry.cur;
+                entry.prev_ms = entry.cur_ms;
+                entry.has_prev = true;
+            }
+            entry.cur_ms = now_ms;
+            read_bones(player, entry.cur);
+            static long long bone_log = 0;
+            if (diag::every(bone_log, 5000))
+                diag::log("BONES", "player=0x%llx mask=0x%x head=%d count=%d",
+                          (unsigned long long)player, entry.cur.mask, entry.cur.has_head() ? 1 : 0,
+                          __builtin_popcount(entry.cur.mask));
+        }
+        if (!entry.has_prev || !entry.cur.mask) return entry.cur;
+        const double span = double(entry.cur_ms - entry.prev_ms);
+        if (span <= 0.0 || span > 200.0) return entry.cur;
+        const float a = float(std::clamp(double(now_ms - entry.prev_ms) / span, 0.0, 1.5));
+        BoneData result = entry.cur;
+        for (int b = 0; b < kBoneCount; ++b) {
+            if (entry.prev.has(b) && entry.cur.has(b)) {
+                const Vector3& p = entry.prev.positions[b];
+                const Vector3& c = entry.cur.positions[b];
+                result.positions[b] = {p.x + (c.x - p.x) * a,
+                                       p.y + (c.y - p.y) * a,
+                                       p.z + (c.z - p.z) * a};
+            }
+        }
+        return result;
     }
 
     inline HealthInfo health_info(const player_snapshot& p) noexcept {

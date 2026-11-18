@@ -534,15 +534,15 @@ void visuals::draw() {
                 ImVec2 sa, sb;
                 if (!world_to_screen(Enemy.bones.positions[a], ViewMatrix, ProjectionMatrix, sa) ||
                     !world_to_screen(Enemy.bones.positions[b], ViewMatrix, ProjectionMatrix, sb)) continue;
-                dl->AddLine(sa, sb, bone_col, 1.5f);
+                dl->AddLine(sa, sb, bone_col, 3.f);
             }
             if (Enemy.bones.has_head()) {
                 ImVec2 head_s, neck_s;
                 if (world_to_screen(Enemy.bones.positions[player::BoneHead], ViewMatrix, ProjectionMatrix, head_s) &&
                     Enemy.bones.has(player::BoneNeck) &&
                     world_to_screen(Enemy.bones.positions[player::BoneNeck], ViewMatrix, ProjectionMatrix, neck_s)) {
-                    float r = std::max(3.f, std::fabs(head_s.y - neck_s.y) * 0.6f);
-                    dl->AddCircle(head_s, r, bone_col, 12, 1.5f);
+                    float r = std::max(4.f, std::fabs(head_s.y - neck_s.y) * 0.7f);
+                    dl->AddCircle(head_s, r, bone_col, 12, 3.f);
                 }
             }
         }
@@ -592,22 +592,23 @@ void visuals::draw() {
             t.visible = false; // default: invisible (safe — require positive confirmation)
             t.bones = e.bones;
 
-            // --- Memory-based visibility check (adapted from PC source) ---
-            // Layer 1: szi.mow enum. mow > 0 means the game's own vis system
-            // confirms the player is at least in the frustum.
-            bool szi_ok = false;
-            uint8_t mow = 0;
+            // --- Dual-layer visibility check ---
+            // Both layers must agree for the target to be visible.
+            // Layer 1: szi.mow (frustum check, necessary but not sufficient).
+            // Layer 2: PlayerAnimationData.IsVisible (occlusion-aware, the
+            //          animation system stops updating invisible characters).
+            bool in_frustum = false;
             if (e.snap) {
                 const uint64_t szi = untag(e.snap->szi);
                 if (obj_ptr(szi)) {
-                    szi_ok = mem_read(szi + v100::szi_mow, &mow, 1);
-                    if (szi_ok && mow > 0)
-                        t.visible = true;
+                    uint8_t mow = 0;
+                    if (mem_read(szi + v100::szi_mow, &mow, 1) && mow > 0)
+                        in_frustum = true;
                 }
             }
 
-            // Layer 2: PlayerAnimationData.IsVisible tightens the gate.
-            // The animation system sets it only while the character is rendered.
+            bool anim_confirmed = true;
+            bool anim_checked = false;
             auto it = s_chc_cache.find(e.object);
             uint64_t chc = 0;
             if (it != s_chc_cache.end() && exact_class(it->second, chc_class))
@@ -619,22 +620,14 @@ void visuals::draw() {
             if (obj_ptr(chc)) {
                 const uint64_t anim = untag(rpm<uint64_t>(chc + v100::presentation_animation_data));
                 if (obj_ptr(anim)) {
-                    // Validate by position: only trust the anim data if its
-                    // stored position is close to the player's known position.
-                    Vector3 anim_pos{};
                     uint8_t anim_visible = 0;
-                    bool pos_ok = mem_read(anim + v100::animation_player_position, &anim_pos, sizeof(anim_pos));
-                    bool vis_ok = mem_read(anim + v100::animation_is_visible, &anim_visible, 1);
-                    if (pos_ok && vis_ok) {
-                        float dx = anim_pos.x - e.position.x;
-                        float dy = anim_pos.y - e.position.y;
-                        float dz = anim_pos.z - e.position.z;
-                        bool pos_match = (dx*dx + dy*dy + dz*dz) < 4.0f;
-                        if (pos_match && anim_visible == 0)
-                            t.visible = false;
+                    if (mem_read(anim + v100::animation_is_visible, &anim_visible, 1)) {
+                        anim_checked = true;
+                        anim_confirmed = (anim_visible > 0);
                     }
                 }
             }
+            t.visible = in_frustum && (anim_confirmed || !anim_checked);
 
             trig_tgts.push_back(t);
         }

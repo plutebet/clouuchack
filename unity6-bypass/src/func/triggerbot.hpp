@@ -48,8 +48,12 @@ inline uint32_t s_seq = 0;
 inline bool s_pressed = false;
 inline long long s_release_at = 0;
 inline uint32_t s_fire_count = 0;
-inline std::unordered_map<uint64_t, uint8_t> s_vis_streak;
-static constexpr uint8_t kVisConfirmFrames = 3;
+struct vis_timer_entry {
+    long long first_visible_ms{0};
+    bool tracking{false};
+};
+inline std::unordered_map<uint64_t, vis_timer_entry> s_vis_timer;
+static constexpr long long kVisConfirmMs = 150;
 
 inline void reset() {
     s_tracking = 0;
@@ -121,11 +125,12 @@ inline uint64_t plan(const target* targets, int count,
 
     if (cfg::trigger::vis_check) {
         for (int i = 0; i < count; ++i) {
-            auto& streak = s_vis_streak[targets[i].id];
-            if (targets[i].visible)
-                streak = std::min<uint8_t>(255, streak + 1);
-            else
-                streak = 0;
+            auto& vt = s_vis_timer[targets[i].id];
+            if (targets[i].visible) {
+                if (!vt.tracking) { vt.first_visible_ms = now_ms; vt.tracking = true; }
+            } else {
+                vt.tracking = false;
+            }
         }
     }
 
@@ -135,7 +140,10 @@ inline uint64_t plan(const target* targets, int count,
     for (int i = 0; i < count; ++i) {
         const target& t = targets[i];
 
-        if (cfg::trigger::vis_check && s_vis_streak[t.id] < kVisConfirmFrames) continue;
+        if (cfg::trigger::vis_check) {
+            auto& vt = s_vis_timer[t.id];
+            if (!vt.tracking || (now_ms - vt.first_visible_ms) < kVisConfirmMs) continue;
+        }
 
         bool hit = false;
         float depth = 1e9f;
@@ -196,11 +204,11 @@ inline void tick(const target* targets, int count,
                   count, int(s_pressed), s_fire_count,
                   inject::g_fd, int(cfg::trigger::vis_check));
 
-        for (auto it = s_vis_streak.begin(); it != s_vis_streak.end(); ) {
+        for (auto it = s_vis_timer.begin(); it != s_vis_timer.end(); ) {
             bool found = false;
             for (int i = 0; i < count; ++i)
                 if (targets[i].id == it->first) { found = true; break; }
-            if (!found) it = s_vis_streak.erase(it); else ++it;
+            if (!found) it = s_vis_timer.erase(it); else ++it;
         }
     }
 
