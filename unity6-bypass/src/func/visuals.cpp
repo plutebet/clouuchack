@@ -589,7 +589,7 @@ void visuals::draw() {
             t.feet = e.position;
             t.hp = e.hp;
             t.max_hp = e.max_hp;
-            t.visible = true; // default: visible (fallback if reads fail)
+            t.visible = false; // default: invisible (safe — require positive confirmation)
             t.bones = e.bones;
 
             // --- Memory-based visibility check (adapted from PC source) ---
@@ -601,8 +601,8 @@ void visuals::draw() {
                 const uint64_t szi = untag(e.snap->szi);
                 if (obj_ptr(szi)) {
                     szi_ok = mem_read(szi + v100::szi_mow, &mow, 1);
-                    if (szi_ok && mow == 0)
-                        t.visible = false;
+                    if (szi_ok && mow > 0)
+                        t.visible = true;
                 }
             }
 

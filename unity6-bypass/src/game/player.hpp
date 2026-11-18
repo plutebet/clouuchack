@@ -95,6 +95,7 @@ namespace player {
     inline constexpr TransformLayout k_profile_layout{
         int(v100::transform_hierarchy), int(v100::transform_index),
         int(v100::hierarchy_entries), int(v100::hierarchy_parents), -1};
+    inline constexpr TransformLayout k_alt_layout{0x28, 0x30, 0x18, 0x20, -1};
     inline constexpr TransformLayout k_legacy_layout{0x38, 0x40, 0x18, 0x20, -1};
 
     inline bool same_layout(const TransformLayout& a, const TransformLayout& b) noexcept {
@@ -102,7 +103,7 @@ namespace player {
                a.entries_offset == b.entries_offset && a.parents_offset == b.parents_offset;
     }
     inline bool known_layout(const TransformLayout& l) noexcept {
-        return same_layout(l, k_profile_layout) || same_layout(l, k_legacy_layout);
+        return same_layout(l, k_profile_layout) || same_layout(l, k_alt_layout) || same_layout(l, k_legacy_layout);
     }
     inline bool decode_with(uint64_t native, const TransformLayout& l, Vector3& out) noexcept {
         return l.data_offset >= 0 &&
@@ -136,7 +137,7 @@ namespace player {
 
         // The profile layout first, then the older Unity one. Either one
         // working replaces whatever was active, including a searched layout.
-        for (const TransformLayout& known : {k_profile_layout, k_legacy_layout}) {
+        for (const TransformLayout& known : {k_profile_layout, k_alt_layout, k_legacy_layout}) {
             if (!decode_with(native, known, out)) continue;
             if (!same_layout(g_transform_layout, known))
                 diag::log("INFO", "Unity Transform layout %s data=+0x%x index=+0x%x entries=+0x%x parents=+0x%x",

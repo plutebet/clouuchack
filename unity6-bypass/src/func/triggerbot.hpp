@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <unordered_map>
 
 namespace triggerbot {
 
@@ -47,6 +48,8 @@ inline uint32_t s_seq = 0;
 inline bool s_pressed = false;
 inline long long s_release_at = 0;
 inline uint32_t s_fire_count = 0;
+inline std::unordered_map<uint64_t, uint8_t> s_vis_streak;
+static constexpr uint8_t kVisConfirmFrames = 3;
 
 inline void reset() {
     s_tracking = 0;
@@ -115,13 +118,24 @@ inline bool hit_capsule(const Vector3& head, const Vector3& feet,
 inline uint64_t plan(const target* targets, int count,
                      const matrix& view, const matrix& proj, long long now_ms) {
     ++s_seq;
+
+    if (cfg::trigger::vis_check) {
+        for (int i = 0; i < count; ++i) {
+            auto& streak = s_vis_streak[targets[i].id];
+            if (targets[i].visible)
+                streak = std::min<uint8_t>(255, streak + 1);
+            else
+                streak = 0;
+        }
+    }
+
     uint64_t chosen = 0;
     float best = 1e9f;
 
     for (int i = 0; i < count; ++i) {
         const target& t = targets[i];
 
-        if (cfg::trigger::vis_check && !t.visible) continue;
+        if (cfg::trigger::vis_check && s_vis_streak[t.id] < kVisConfirmFrames) continue;
 
         bool hit = false;
         float depth = 1e9f;
@@ -181,6 +195,13 @@ inline void tick(const target* targets, int count,
                   cfg::trigger::fire_x, cfg::trigger::fire_y,
                   count, int(s_pressed), s_fire_count,
                   inject::g_fd, int(cfg::trigger::vis_check));
+
+        for (auto it = s_vis_streak.begin(); it != s_vis_streak.end(); ) {
+            bool found = false;
+            for (int i = 0; i < count; ++i)
+                if (targets[i].id == it->first) { found = true; break; }
+            if (!found) it = s_vis_streak.erase(it); else ++it;
+        }
     }
 
     if (s_pressed && now_ms >= s_release_at) {
