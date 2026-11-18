@@ -367,10 +367,6 @@ namespace ui::menu {
             fire_button_row(dl, c, cw, row, a, k, live);
             c.y += row;
 
-            const char* region_names[] = {"All", "Head", "Body"};
-            segmented(dl, region_names, 3, &cfg::trigger::region, c, cw, 48.f * k, a, k, live);
-            c.y += 48.f * k + 16.f * k;
-
             slider_row(dl, "FOV", &cfg::trigger::fov, 0.2f, 3.0f, c, cw, row, a, k, live);
             c.y += row;
 

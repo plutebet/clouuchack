@@ -109,18 +109,16 @@ inline uint64_t plan(const target* targets, int count,
         if (cfg::trigger::vis_check && !t.visible) continue;
 
         bool hit = false;
-        float depth = 0.f;
+        float depth = 1e9f;
 
-        if (cfg::trigger::region == 1) {
-            // Bone head (#10) gives precise head hitbox when available
-            const Vector3 head_pos = t.bones.has_head() ? t.bones.positions[player::BoneHead] : t.head;
-            hit = hit_point(head_pos, view, proj, 0.12f, depth);
-        } else if (cfg::trigger::region == 2) {
-            // Chest bone (#8) for body center when available
-            const Vector3 body = t.bones.has(player::BoneChest)
-                ? t.bones.positions[player::BoneChest]
-                : t.feet + (t.head - t.feet) * 0.65f;
-            hit = hit_point(body, view, proj, 0.25f, depth);
+        if (t.bones.mask) {
+            for (int b = 0; b < player::kBoneCount; ++b) {
+                if (!t.bones.has(b)) continue;
+                float d = 0.f;
+                if (hit_point(t.bones.positions[b], view, proj, 0.10f, d) && d < depth) {
+                    depth = d; hit = true;
+                }
+            }
         } else {
             hit = hit_capsule(t.head, t.feet, view, proj, depth);
         }

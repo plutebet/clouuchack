@@ -25,7 +25,7 @@ namespace trigger {
     inline int delay_ms = 0;
     inline int interval_ms = 50;
     inline int confirm = 1;
-    inline int region = 0;
+    inline int region = 0;  // legacy, unused — bones check all 19 joints
     inline float fire_x = 0.f;
     inline float fire_y = 0.f;
     inline bool fire_set = false;

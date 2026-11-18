@@ -310,7 +310,7 @@ void visuals::draw() {
         if (!apply_pose(e, s_frame[fi].pose)) continue;
         e.rebuilt = s_frame[fi].rebuilt;
         // Bone reading (cached at 10 Hz)
-        if (cfg::esp::skeleton || cfg::trigger::region == 1) {
+        if (cfg::esp::skeleton || cfg::trigger::enabled) {
             e.bones = player::cached_bones(p.object, now_ms);
             if (e.bones.has_head())
                 e.head = e.bones.positions[player::BoneHead];
