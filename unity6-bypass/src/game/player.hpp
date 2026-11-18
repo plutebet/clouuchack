@@ -1018,8 +1018,12 @@ namespace player {
 
     inline BoneData cached_bones(uint64_t player, long long now_ms) {
         auto it = g_bone_cache.find(player);
-        if (it != g_bone_cache.end() && now_ms - it->second.refreshed_ms < 100)
-            return it->second.data;
+        if (it != g_bone_cache.end()) {
+            const int have = __builtin_popcount(it->second.data.mask);
+            const long long ttl = have >= kBoneCount ? 100 : (have > 0 ? 20 : 0);
+            if (now_ms - it->second.refreshed_ms < ttl)
+                return it->second.data;
+        }
         bone_cache_entry& entry = g_bone_cache[player];
         entry.refreshed_ms = now_ms;
         read_bones(player, entry.data);

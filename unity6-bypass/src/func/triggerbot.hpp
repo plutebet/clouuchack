@@ -21,6 +21,21 @@ struct target {
     player::BoneData bones;    // bone positions (Head=10 for precise headshot)
 };
 
+inline float bone_radius(int bone) {
+    using namespace player;
+    switch (bone) {
+        case BoneHips: case BoneSpine: case BoneChest: return 0.22f;
+        case BoneNeck: return 0.14f;
+        case BoneHead: return 0.14f;
+        case BoneLeftShoulder: case BoneRightShoulder: return 0.18f;
+        case BoneLeftUpperArm: case BoneRightUpperArm:
+        case BoneLeftUpperLeg: case BoneRightUpperLeg: return 0.15f;
+        case BoneLeftLowerArm: case BoneRightLowerArm:
+        case BoneLeftLowerLeg: case BoneRightLowerLeg: return 0.12f;
+        default: return 0.10f;
+    }
+}
+
 // ---- core state ----
 inline uint64_t s_tracking = 0;
 inline long long s_since = 0;
@@ -115,7 +130,7 @@ inline uint64_t plan(const target* targets, int count,
             for (int b = 0; b < player::kBoneCount; ++b) {
                 if (!t.bones.has(b)) continue;
                 float d = 0.f;
-                if (hit_point(t.bones.positions[b], view, proj, 0.10f, d) && d < depth) {
+                if (hit_point(t.bones.positions[b], view, proj, bone_radius(b), d) && d < depth) {
                     depth = d; hit = true;
                 }
             }

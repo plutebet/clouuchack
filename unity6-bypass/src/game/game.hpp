@@ -120,7 +120,7 @@ namespace v100 {
     // with plausible world positions. The older 0x38/0x40 layout never
     // decoded on this build.
     inline constexpr uint64_t transform_hierarchy = 0x28;   // native Transform: TransformHierarchy*
-    inline constexpr uint64_t transform_index = 0x10;       // native Transform: index in the hierarchy (int)
+    inline constexpr uint64_t transform_index = 0x14;       // native Transform: index in the hierarchy (int) — probe confirmed +0x14 on device
     inline constexpr uint64_t hierarchy_entries = 0x18;     // TransformHierarchy: TRS entries (48 bytes each)
     inline constexpr uint64_t hierarchy_parents = 0x20;     // TransformHierarchy: parent indices (int32)
     inline constexpr uint64_t camera_view = 0x70;           // native Camera worldToCamera (observed, pattern-verified at runtime)
