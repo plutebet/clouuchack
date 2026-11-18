@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <unordered_map>
 
 namespace triggerbot {
 
@@ -17,30 +16,8 @@ struct target {
     Vector3 feet;
     int hp;
     int max_hp;
-    uint8_t szi_wide[256];     // szi+0x00..+0xFF (256 bytes)
-    bool szi_ok;
-    uint8_t odq_ext[64];       // player+0x98..+0xD7 (beyond known fields)
-    bool ext_ok;
-    uint8_t chc_data[128];     // presentation component chc+0x00..+0x7F
-    bool chc_ok;
-    uint8_t anim_data[176];    // PlayerAnimationData +0x00..+0xAF
-    bool anim_ok;
+    bool visible;              // memory-based vis check (szi.mow + anim.IsVisible)
 };
-
-// ---- probe-and-observe wall detection ----
-inline std::unordered_map<uint64_t, long long> s_wall; // id -> unblock time
-inline uint64_t s_wt_id = 0;
-inline int      s_wt_hp = 0;
-inline uint32_t s_wt_fires = 0;
-inline long long s_wt_first = 0;
-inline long long s_wt_last = 0;
-inline bool     s_wt_vis = false;  // confirmed visible (HP dropped)
-inline uint32_t s_wall_blocks = 0;
-
-static constexpr uint32_t kProbeShots  = 1;     // fire 1 probe shot
-static constexpr long long kProbeWaitMs = 300;   // then observe 300ms for HP drop
-static constexpr long long kWallCooldownMs = 1200;
-static constexpr long long kWallStaleMs = 2000;
 
 // ---- core state ----
 inline uint64_t s_tracking = 0;
@@ -124,15 +101,10 @@ inline uint64_t plan(const target* targets, int count,
     uint64_t chosen = 0;
     float best = 1e9f;
 
-    if (cfg::trigger::vis_check) {
-        for (auto it = s_wall.begin(); it != s_wall.end(); )
-            if (now_ms >= it->second) it = s_wall.erase(it); else ++it;
-    }
-
     for (int i = 0; i < count; ++i) {
         const target& t = targets[i];
 
-        if (cfg::trigger::vis_check && s_wall.count(t.id)) continue;
+        if (cfg::trigger::vis_check && !t.visible) continue;
 
         bool hit = false;
         float depth = 0.f;
@@ -184,11 +156,10 @@ inline void tick(const target* targets, int count,
                  const matrix& view, const matrix& proj, long long now_ms) {
     static long long status_log = 0;
     if (diag::every(status_log, 3000)) {
-        diag::log("TRIGGER", "status: en=%d fire_set=%d pos=(%.0f,%.0f) tgts=%d pressed=%d fires=%u walls=%u wt=(0x%llx f=%u hp=%d vis=%d) fd=%d vc=%d",
+        diag::log("TRIGGER", "status: en=%d fire_set=%d pos=(%.0f,%.0f) tgts=%d pressed=%d fires=%u fd=%d vc=%d",
                   int(cfg::trigger::enabled), int(cfg::trigger::fire_set),
                   cfg::trigger::fire_x, cfg::trigger::fire_y,
-                  count, int(s_pressed), s_fire_count, s_wall_blocks,
-                  (unsigned long long)s_wt_id, s_wt_fires, s_wt_hp, int(s_wt_vis),
+                  count, int(s_pressed), s_fire_count,
                   inject::g_fd, int(cfg::trigger::vis_check));
     }
 
@@ -210,67 +181,17 @@ inline void tick(const target* targets, int count,
     uint64_t id = plan(targets, count, view, proj, now_ms);
     if (!id) return;
 
-    // ---- damage-feedback wall check ----
     int hp = 0;
-    const target* tgt = nullptr;
     for (int i = 0; i < count; ++i)
-        if (targets[i].id == id) { hp = targets[i].hp; tgt = &targets[i]; break; }
-
-    if (cfg::trigger::vis_check) {
-        // reset tracker on target change or stale timeout
-        if (id != s_wt_id || (s_wt_fires > 0 && now_ms - s_wt_last > kWallStaleMs)) {
-            s_wt_id = id;
-            s_wt_hp = hp;
-            s_wt_fires = 0;
-            s_wt_first = now_ms;
-            s_wt_vis = false;
-        }
-
-        // HP dropped → confirmed visible
-        if (hp < s_wt_hp && hp > 0) {
-            s_wt_hp = hp;
-            s_wt_vis = true;
-            s_wt_fires = 0;
-            s_wt_first = now_ms;
-            s_wall.erase(id);
-        }
-
-        // probe-and-observe: fire kProbeShots, then wait for HP feedback
-        if (!s_wt_vis && s_wt_fires >= kProbeShots) {
-            long long elapsed = now_ms - s_wt_first;
-            if (elapsed < kProbeWaitMs) {
-                return; // observing — waiting for server HP response
-            }
-            // probe window expired with no HP drop → wall
-            s_wall[id] = now_ms + kWallCooldownMs;
-            ++s_wall_blocks;
-            diag::log("TRIGGER", "WALL id=0x%llx hp=%d probe=%u wait=%lldms block=%lldms (total=%u)",
-                      (unsigned long long)id, hp, s_wt_fires, elapsed, kWallCooldownMs, s_wall_blocks);
-            s_wt_id = 0;
-            s_wt_fires = 0;
-            s_wt_vis = false;
-            reset();
-            return;
-        }
-
-        // re-probe after burst of confirmed-visible shots with no new HP drop
-        if (s_wt_vis && s_wt_fires >= 6) {
-            s_wt_vis = false;
-            s_wt_fires = kProbeShots; // force observe
-            s_wt_first = now_ms - kProbeWaitMs + 100; // short grace
-        }
-
-        s_wt_fires++;
-        s_wt_last = now_ms;
-    }
+        if (targets[i].id == id) { hp = targets[i].hp; break; }
 
     inject::tap_down(cfg::trigger::fire_x, cfg::trigger::fire_y);
     s_pressed = true;
     s_release_at = now_ms + 30;
     ++s_fire_count;
 
-    diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d conf=%u wf=%u vis=%d",
-              s_fire_count, (unsigned long long)id, hp, s_confirmed, s_wt_fires, int(s_wt_vis));
+    diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d conf=%u",
+              s_fire_count, (unsigned long long)id, hp, s_confirmed);
 }
 
 }

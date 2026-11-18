@@ -558,18 +558,24 @@ void visuals::draw() {
             t.feet = e.position;
             t.hp = e.hp;
             t.max_hp = e.max_hp;
+            t.visible = true; // default: visible (fallback if reads fail)
 
-            // szi: read 256 bytes (extended from 96)
+            // --- Memory-based visibility check (adapted from PC source) ---
+            // Layer 1: szi.mow enum. mow > 0 means the game's own vis system
+            // confirms the player is at least in the frustum.
+            bool szi_ok = false;
+            uint8_t mow = 0;
             if (e.snap) {
                 const uint64_t szi = untag(e.snap->szi);
-                if (obj_ptr(szi))
-                    t.szi_ok = mem_read(szi, t.szi_wide, 256);
+                if (obj_ptr(szi)) {
+                    szi_ok = mem_read(szi + v100::szi_mow, &mow, 1);
+                    if (szi_ok && mow == 0)
+                        t.visible = false;
+                }
             }
 
-            // odq extended: player+0x98..+0xD7
-            t.ext_ok = mem_read(e.object + 0x98, t.odq_ext, 64);
-
-            // presentation component (chc): find via component walk, cached
+            // Layer 2: PlayerAnimationData.IsVisible tightens the gate.
+            // The animation system sets it only while the character is rendered.
             auto it = s_chc_cache.find(e.object);
             uint64_t chc = 0;
             if (it != s_chc_cache.end() && exact_class(it->second, chc_class))
@@ -578,13 +584,24 @@ void visuals::draw() {
                 chc = find_player_component(e.object, chc_class);
                 if (chc) s_chc_cache[e.object] = chc;
             }
-            if (obj_ptr(chc))
-                t.chc_ok = mem_read(chc, t.chc_data, 128);
-            // read PlayerAnimationData directly from chc+0xA0
             if (obj_ptr(chc)) {
                 const uint64_t anim = untag(rpm<uint64_t>(chc + v100::presentation_animation_data));
-                if (obj_ptr(anim))
-                    t.anim_ok = mem_read(anim, t.anim_data, 176);
+                if (obj_ptr(anim)) {
+                    // Validate by position: only trust the anim data if its
+                    // stored position is close to the player's known position.
+                    Vector3 anim_pos{};
+                    uint8_t anim_visible = 0;
+                    bool pos_ok = mem_read(anim + v100::animation_player_position, &anim_pos, sizeof(anim_pos));
+                    bool vis_ok = mem_read(anim + v100::animation_is_visible, &anim_visible, 1);
+                    if (pos_ok && vis_ok) {
+                        float dx = anim_pos.x - e.position.x;
+                        float dy = anim_pos.y - e.position.y;
+                        float dz = anim_pos.z - e.position.z;
+                        bool pos_match = (dx*dx + dy*dy + dz*dz) < 4.0f;
+                        if (pos_match && anim_visible == 0)
+                            t.visible = false;
+                    }
+                }
             }
 
             trig_tgts.push_back(t);
@@ -601,47 +618,12 @@ void visuals::draw() {
         triggerbot::tick(trig_tgts.data(), int(trig_tgts.size()),
                          ViewMatrix, ProjectionMatrix, now_ms);
 
-        // VSCAN4: periodic wide dump for vis-byte discovery
-        // Tag each with wall detection state: W=wall-blacklisted, V=confirmed-visible, ?=unknown
-        static long long vscan_log = 0;
-        if (diag::every(vscan_log, 2000) && !trig_tgts.empty()) {
+        // Vis-check debug log
+        static long long vis_log = 0;
+        if (diag::every(vis_log, 3000) && !trig_tgts.empty()) {
             for (const auto& t : trig_tgts) {
-                char vis_tag = '?';
-                if (triggerbot::s_wall.count(t.id)) vis_tag = 'W';
-                else if (triggerbot::s_wt_id == t.id && triggerbot::s_wt_vis) vis_tag = 'V';
-
-                // szi 256 bytes
-                if (t.szi_ok) {
-                    char hex[256 * 3 + 1] = {0};
-                    for (int j = 0; j < 256; ++j)
-                        std::snprintf(hex + j * 3, 4, "%02x ", t.szi_wide[j]);
-                    diag::log("VSCAN4", "id=0x%llx hp=%d vis=%c src=szi data=[%s]",
-                              (unsigned long long)t.id, t.hp, vis_tag, hex);
-                }
-                // odq extended 64 bytes
-                if (t.ext_ok) {
-                    char hex[64 * 3 + 1] = {0};
-                    for (int j = 0; j < 64; ++j)
-                        std::snprintf(hex + j * 3, 4, "%02x ", t.odq_ext[j]);
-                    diag::log("VSCAN4", "id=0x%llx hp=%d vis=%c src=odx data=[%s]",
-                              (unsigned long long)t.id, t.hp, vis_tag, hex);
-                }
-                // chc 128 bytes
-                if (t.chc_ok) {
-                    char hex[128 * 3 + 1] = {0};
-                    for (int j = 0; j < 128; ++j)
-                        std::snprintf(hex + j * 3, 4, "%02x ", t.chc_data[j]);
-                    diag::log("VSCAN4", "id=0x%llx hp=%d vis=%c src=chc data=[%s]",
-                              (unsigned long long)t.id, t.hp, vis_tag, hex);
-                }
-                // PlayerAnimationData 176 bytes
-                if (t.anim_ok) {
-                    char hex[176 * 3 + 1] = {0};
-                    for (int j = 0; j < 176; ++j)
-                        std::snprintf(hex + j * 3, 4, "%02x ", t.anim_data[j]);
-                    diag::log("VSCAN4", "id=0x%llx hp=%d vis=%c src=anim data=[%s]",
-                              (unsigned long long)t.id, t.hp, vis_tag, hex);
-                }
+                diag::log("VISCHECK", "id=0x%llx hp=%d visible=%d",
+                          (unsigned long long)t.id, t.hp, int(t.visible));
             }
         }
     }

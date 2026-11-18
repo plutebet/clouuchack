@@ -93,7 +93,12 @@ namespace v100 {
     inline constexpr uint64_t player_stats = 0x70;          // odq.djka : ydm
     inline constexpr uint64_t player_camera_state = 0x78;   // odq.gjvt : vqn
     inline constexpr uint64_t player_view_mode = 0x80;      // odq.jkhm : dvp (0 third person, 1 first person)
+    inline constexpr uint64_t player_szi = 0x88;             // odq.mktf : szi (vis state)
     inline constexpr uint64_t player_team = 0x90;           // odq.<pley> byte
+    // szi (vis state) field offsets — 6 bytes at szi+0x10:
+    //   +0x10 bool fhzz, +0x11 mow enum (None=0/InFrustumOnly=1/Always=2),
+    //   +0x12 bool lixl, +0x13 bool ojje, +0x14 bool rjux, +0x15 bool ukgq
+    inline constexpr uint64_t szi_mow = 0x11;               // szi.mow : mow enum byte
     inline constexpr uint64_t stats_hp = 0x10;              // ydm.espa (ushort), getter bdqp
     inline constexpr uint64_t stats_max_hp = 0x14;          // ydm.ktmm (ushort), getter nfln
     inline constexpr uint64_t parts_array = 0x20;           // nzk.kevw : cew[]
@@ -117,7 +122,9 @@ namespace v100 {
     inline constexpr uint64_t presentation_camera_state = 0x60;   // chc.ydtf : vqn
     inline constexpr uint64_t animation_arms_camera = 0x90;       // PlayerAnimationData.<ArmsCamera> : bor
     inline constexpr uint64_t animation_main_camera = 0x100;      // PlayerAnimationData.<MainCamera> : bor
-    inline constexpr uint64_t animation_is_first_person = 0xA4;   // PlayerAnimationData.<IsFirstPerson>
+    inline constexpr uint64_t animation_is_visible = 0x9C;        // PlayerAnimationData.<IsVisible> bool
+    inline constexpr uint64_t animation_player_position = 0x5C;  // PlayerAnimationData.<PlayerPosition> Vector3
+    inline constexpr uint64_t animation_is_first_person = 0xA4;  // PlayerAnimationData.<IsFirstPerson>
     inline constexpr uint64_t controller_state = 0x10;      // cgy.elgy : bor
     inline constexpr uint64_t controller_transform = 0x18;  // cgy.hlsr : Transform
     inline constexpr uint64_t controller_camera = 0x20;     // cgy.<kmek> : UnityEngine.Camera
