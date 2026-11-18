@@ -556,26 +556,26 @@ void visuals::draw() {
             t.hp = e.hp;
             t.max_hp = e.max_hp;
             t.szi_ok = false;
-            std::memset(t.szi, 0, sizeof(t.szi));
+            std::memset(t.szi_wide, 0, sizeof(t.szi_wide));
             if (e.snap) {
                 const uint64_t szi = untag(e.snap->szi);
                 if (obj_ptr(szi))
-                    t.szi_ok = mem_read(szi + 0x10, t.szi, 32);
+                    t.szi_ok = mem_read(szi, t.szi_wide, 96);
             }
             trig_tgts.push_back(t);
         }
         triggerbot::tick(trig_tgts.data(), int(trig_tgts.size()),
                          ViewMatrix, ProjectionMatrix, now_ms);
 
-        // periodic szi dump for all enemies (vis-byte discovery)
+        // periodic wide szi dump for vis-byte discovery (96 bytes from szi+0x00)
         static long long vscan_log = 0;
         if (diag::every(vscan_log, 2000) && !trig_tgts.empty()) {
             for (const auto& t : trig_tgts) {
                 if (!t.szi_ok) continue;
-                char hex[32 * 3 + 1] = {0};
-                for (int j = 0; j < 32; ++j)
-                    std::snprintf(hex + j * 3, 4, "%02x ", t.szi[j]);
-                diag::log("VSCAN2", "id=0x%llx hp=%d szi=[%s]",
+                char hex[96 * 3 + 1] = {0};
+                for (int j = 0; j < 96; ++j)
+                    std::snprintf(hex + j * 3, 4, "%02x ", t.szi_wide[j]);
+                diag::log("VSCAN3", "id=0x%llx hp=%d szi=[%s]",
                           (unsigned long long)t.id, t.hp, hex);
             }
         }
