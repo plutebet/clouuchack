@@ -105,6 +105,13 @@ namespace v100 {
     inline constexpr uint64_t transform_a = 0x28;           // mtc.<jpkx> Transform
     inline constexpr uint64_t transform_b = 0x30;           // mtc.<mpwq> Transform
     inline constexpr uint64_t model_transform = 0x20;       // bis.<dcul> Transform
+    inline constexpr uint64_t model_bindings = 0x30;       // bis.<jdrx> CharacterBindings
+    inline constexpr uint64_t bindings_bones = 0x20;       // CharacterBindings._bones BonesDictionary
+    inline constexpr uint64_t bones_m_dict = 0x10;         // SerializableDictionaryBase.m_dict (Dictionary<HumanBodyBones, Transform>)
+    inline constexpr uint64_t bones_m_keys = 0x18;         // SerializableDictionaryBase.m_keys (HumanBodyBones[])
+    inline constexpr uint64_t bones_m_values = 0x20;       // SerializableDictionaryBase.m_values (Transform[])
+    inline constexpr uint64_t dict_entries = 0x18;          // Dictionary._entries array
+    inline constexpr uint64_t dict_count = 0x20;            // Dictionary._count int
     inline constexpr uint64_t unity_cached_ptr = 0x10;      // UnityEngine.Object.m_CachedPtr
     // Native Transform -> TransformHierarchy (Unity 6000.3, this libunity).
     // Measured, not from dump.cs: the runtime layout search found exactly

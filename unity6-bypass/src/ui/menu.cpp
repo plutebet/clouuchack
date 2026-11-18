@@ -296,6 +296,7 @@ namespace ui::menu {
                 {"Health", &cfg::esp::health},
                 {"Weapon", &cfg::esp::weapon},
                 {"Smooth", &cfg::esp::smooth},
+                {"Skeleton", &cfg::esp::skeleton},
             };
             for (const item& it : items) {
                 toggle_row(dl, it.name, it.value, c, cw, row, a, k, live);

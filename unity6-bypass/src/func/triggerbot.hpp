@@ -4,6 +4,7 @@
 #include "../ui/cfg.hpp"
 #include "../other/touch_inject.hpp"
 #include "../other/diag.hpp"
+#include "../game/player.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -17,6 +18,7 @@ struct target {
     int hp;
     int max_hp;
     bool visible;              // memory-based vis check (szi.mow + anim.IsVisible)
+    player::BoneData bones;    // bone positions (Head=10 for precise headshot)
 };
 
 // ---- core state ----
@@ -110,9 +112,14 @@ inline uint64_t plan(const target* targets, int count,
         float depth = 0.f;
 
         if (cfg::trigger::region == 1) {
-            hit = hit_point(t.head, view, proj, 0.14f, depth);
+            // Bone head (#10) gives precise head hitbox when available
+            const Vector3 head_pos = t.bones.has_head() ? t.bones.positions[player::BoneHead] : t.head;
+            hit = hit_point(head_pos, view, proj, 0.12f, depth);
         } else if (cfg::trigger::region == 2) {
-            Vector3 body = t.feet + (t.head - t.feet) * 0.65f;
+            // Chest bone (#8) for body center when available
+            const Vector3 body = t.bones.has(player::BoneChest)
+                ? t.bones.positions[player::BoneChest]
+                : t.feet + (t.head - t.feet) * 0.65f;
             hit = hit_point(body, view, proj, 0.25f, depth);
         } else {
             hit = hit_capsule(t.head, t.feet, view, proj, depth);

@@ -16,6 +16,7 @@ namespace esp {
     inline ImVec4 name_col = ImVec4(1.f, 1.f, 1.f, 1.f);
     inline ImVec4 health_col = ImVec4(240/255.f, 64/255.f, 90/255.f, 1.f);
     inline ImVec4 team_col = ImVec4(0.3f, 0.6f, 1.f, 1.f);
+    inline bool skeleton = true;
 }
 
 namespace trigger {

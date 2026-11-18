@@ -137,6 +137,7 @@ void visuals::draw() {
         purge_missing(g_last_hp, live);
         purge_missing(g_motion, live);
         purge_missing(player::g_transform_cache, live);
+        purge_missing(player::g_bone_cache, live);
         purge_missing(weapon::g_players, live);
     }
 
@@ -264,6 +265,7 @@ void visuals::draw() {
         int weapon{-1};
         float distance{0.f};
         bool rebuilt{false};
+        player::BoneData bones{};
     };
     std::vector<enemy_frame> frame_enemies;
     frame_enemies.reserve(s_frame.size());
@@ -307,6 +309,12 @@ void visuals::draw() {
         if (cfg::esp::weapon) e.weapon = weapon::active_id(p);
         if (!apply_pose(e, s_frame[fi].pose)) continue;
         e.rebuilt = s_frame[fi].rebuilt;
+        // Bone reading (cached at 10 Hz)
+        if (cfg::esp::skeleton || cfg::trigger::region == 1) {
+            e.bones = player::cached_bones(p.object, now_ms);
+            if (e.bones.has_head())
+                e.head = e.bones.positions[player::BoneHead];
+        }
         ++positioned;
         e.distance = calculate_distance(e.position, LocalPosition);
         if (e.distance > 500.f) continue;
@@ -515,6 +523,29 @@ void visuals::draw() {
             dnick(label, it.min, it.cx, text_sz, fade);
         }
         if (cfg::esp::weapon) dweapon(Enemy.weapon, it.cx, it.max.y + 3.f, it.max.x - it.min.x, text_sz, fade);
+        if (cfg::esp::skeleton && Enemy.bones.mask) {
+            ImDrawList* dl = ImGui::GetBackgroundDrawList();
+            const ImVec4& bc = cfg::esp::box_col;
+            const float ba = std::clamp(bc.w * 0.7f * fade, 0.f, 1.f);
+            const ImU32 bone_col = IM_COL32(int(bc.x*255.f), int(bc.y*255.f), int(bc.z*255.f), int(ba*255.f));
+            for (int li = 0; li < player::kBoneLinkCount; ++li) {
+                const int a = player::kBoneLinks[li][0], b = player::kBoneLinks[li][1];
+                if (!Enemy.bones.has(a) || !Enemy.bones.has(b)) continue;
+                ImVec2 sa, sb;
+                if (!world_to_screen(Enemy.bones.positions[a], ViewMatrix, ProjectionMatrix, sa) ||
+                    !world_to_screen(Enemy.bones.positions[b], ViewMatrix, ProjectionMatrix, sb)) continue;
+                dl->AddLine(sa, sb, bone_col, 1.5f);
+            }
+            if (Enemy.bones.has_head()) {
+                ImVec2 head_s, neck_s;
+                if (world_to_screen(Enemy.bones.positions[player::BoneHead], ViewMatrix, ProjectionMatrix, head_s) &&
+                    Enemy.bones.has(player::BoneNeck) &&
+                    world_to_screen(Enemy.bones.positions[player::BoneNeck], ViewMatrix, ProjectionMatrix, neck_s)) {
+                    float r = std::max(3.f, std::fabs(head_s.y - neck_s.y) * 0.6f);
+                    dl->AddCircle(head_s, r, bone_col, 12, 1.5f);
+                }
+            }
+        }
     }
 
     // ---- fire-button picking overlay ----
@@ -559,6 +590,7 @@ void visuals::draw() {
             t.hp = e.hp;
             t.max_hp = e.max_hp;
             t.visible = true; // default: visible (fallback if reads fail)
+            t.bones = e.bones;
 
             // --- Memory-based visibility check (adapted from PC source) ---
             // Layer 1: szi.mow enum. mow > 0 means the game's own vis system

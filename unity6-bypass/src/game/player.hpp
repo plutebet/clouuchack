@@ -906,6 +906,131 @@ namespace player {
         }
     }
 
+    // ---- Bone system (CharacterBindings → BonesDictionary → 19 HumanBodyBones) ----
+    constexpr int kBoneCount = 19;
+    enum HumanBone : int {
+        BoneHips=0, BoneLeftUpperLeg=1, BoneRightUpperLeg=2, BoneLeftLowerLeg=3, BoneRightLowerLeg=4,
+        BoneLeftFoot=5, BoneRightFoot=6, BoneSpine=7, BoneChest=8, BoneNeck=9, BoneHead=10,
+        BoneLeftShoulder=11, BoneRightShoulder=12, BoneLeftUpperArm=13, BoneRightUpperArm=14,
+        BoneLeftLowerArm=15, BoneRightLowerArm=16, BoneLeftHand=17, BoneRightHand=18
+    };
+    constexpr int kBoneLinks[][2] = {
+        {BoneHips, BoneSpine}, {BoneSpine, BoneChest}, {BoneChest, BoneNeck}, {BoneNeck, BoneHead},
+        {BoneChest, BoneLeftShoulder}, {BoneLeftShoulder, BoneLeftUpperArm},
+        {BoneLeftUpperArm, BoneLeftLowerArm}, {BoneLeftLowerArm, BoneLeftHand},
+        {BoneChest, BoneRightShoulder}, {BoneRightShoulder, BoneRightUpperArm},
+        {BoneRightUpperArm, BoneRightLowerArm}, {BoneRightLowerArm, BoneRightHand},
+        {BoneHips, BoneLeftUpperLeg}, {BoneLeftUpperLeg, BoneLeftLowerLeg}, {BoneLeftLowerLeg, BoneLeftFoot},
+        {BoneHips, BoneRightUpperLeg}, {BoneRightUpperLeg, BoneRightLowerLeg}, {BoneRightLowerLeg, BoneRightFoot},
+    };
+    constexpr int kBoneLinkCount = int(sizeof(kBoneLinks) / sizeof(kBoneLinks[0]));
+
+    struct BoneData {
+        Vector3 positions[kBoneCount]{};
+        uint32_t mask{0};
+        bool has_head() const { return (mask & (1u << BoneHead)) != 0; }
+        bool has(int bone) const { return bone >= 0 && bone < kBoneCount && (mask & (1u << bone)) != 0; }
+    };
+
+    // Per-player bone cache: bis and dictionary pointers change rarely, resolve at 10 Hz.
+    struct bone_cache_entry {
+        uint64_t bis{0};
+        long long refreshed_ms{0};
+        BoneData data{};
+    };
+    inline std::unordered_map<uint64_t, bone_cache_entry> g_bone_cache;
+
+    inline bool read_bones_from_dict(uint64_t bones_dict_obj, BoneData& out) {
+        out = {};
+        // Primary: m_dict Dictionary traversal (matches PC source approach)
+        const uint64_t dict = untag(rpm<uint64_t>(bones_dict_obj + v100::bones_m_dict));
+        if (obj_ptr(dict)) {
+            const uint64_t entries_arr = untag(rpm<uint64_t>(dict + v100::dict_entries));
+            const int32_t count = rpm<int32_t>(dict + v100::dict_count);
+            if (obj_ptr(entries_arr) && count > 0 && count <= 128) {
+                // 64-bit Dictionary Entry: {int hash, int next, int key, int _pad, uint64_t value} = 24 bytes
+                struct DictEntry { int32_t hash, next, key, _pad; uint64_t value; };
+                const size_t n = size_t(count);
+                std::vector<DictEntry> entries(n);
+                if (mem_read(entries_arr + v100::array_data, entries.data(), n * sizeof(DictEntry))) {
+                    for (size_t i = 0; i < n; ++i) {
+                        const DictEntry& e = entries[i];
+                        if (e.hash < 0 || e.key < 0 || e.key >= kBoneCount) continue;
+                        const uint64_t transform = untag(e.value);
+                        if (!obj_ptr(transform)) continue;
+                        const uint64_t native = untag(rpm<uint64_t>(transform + v100::unity_cached_ptr));
+                        Vector3 pos{};
+                        if (native && native_transform_position(native, pos)) {
+                            out.positions[e.key] = pos;
+                            out.mask |= (1u << e.key);
+                        }
+                    }
+                    if (out.has_head()) return true;
+                }
+            }
+        }
+        // Fallback: m_keys[]/m_values[] parallel arrays (SerializeField storage)
+        const uint64_t keys_arr = untag(rpm<uint64_t>(bones_dict_obj + v100::bones_m_keys));
+        const uint64_t vals_arr = untag(rpm<uint64_t>(bones_dict_obj + v100::bones_m_values));
+        if (!obj_ptr(keys_arr) || !obj_ptr(vals_arr)) return out.mask != 0;
+        const uint64_t key_len = rpm<uint64_t>(keys_arr + v100::array_length);
+        const uint64_t val_len = rpm<uint64_t>(vals_arr + v100::array_length);
+        if (key_len == 0 || key_len > 64 || key_len != val_len) return out.mask != 0;
+        std::vector<int32_t> keys(key_len);
+        std::vector<uint64_t> vals(key_len);
+        if (!mem_read(keys_arr + v100::array_data, keys.data(), key_len * sizeof(int32_t)) ||
+            !mem_read(vals_arr + v100::array_data, vals.data(), key_len * sizeof(uint64_t))) return out.mask != 0;
+        for (uint64_t i = 0; i < key_len; ++i) {
+            if (keys[i] < 0 || keys[i] >= kBoneCount) continue;
+            if (out.has(keys[i])) continue;
+            const uint64_t transform = untag(vals[i]);
+            if (!obj_ptr(transform)) continue;
+            const uint64_t native = untag(rpm<uint64_t>(transform + v100::unity_cached_ptr));
+            Vector3 pos{};
+            if (native && native_transform_position(native, pos)) {
+                out.positions[keys[i]] = pos;
+                out.mask |= (1u << keys[i]);
+            }
+        }
+        return out.mask != 0;
+    }
+
+    inline bool read_bones(uint64_t player, BoneData& out) {
+        out = {};
+        const uint64_t model_class = typeinfo(v100::model_typeinfo);
+        if (!model_class) return false;
+        const uint64_t container = rpm<uint64_t>(player + v100::player_parts);
+        const uint64_t array = rpm<uint64_t>(container + v100::parts_array);
+        const uint64_t length = rpm<uint64_t>(array + v100::array_length);
+        if (!obj_ptr(container) || !obj_ptr(array) || length == 0 || length > 64) return false;
+        uint64_t bis = 0;
+        for (uint64_t i = 0; i < length && !bis; ++i) {
+            const uint64_t part = rpm<uint64_t>(array + v100::array_data + i * 8);
+            if (exact_class(part, model_class)) bis = part;
+        }
+        if (!bis) return false;
+        const uint64_t bindings = untag(rpm<uint64_t>(bis + v100::model_bindings));
+        if (!obj_ptr(bindings)) return false;
+        const uint64_t bones_dict_obj = untag(rpm<uint64_t>(bindings + v100::bindings_bones));
+        if (!obj_ptr(bones_dict_obj)) return false;
+        return read_bones_from_dict(bones_dict_obj, out);
+    }
+
+    inline BoneData cached_bones(uint64_t player, long long now_ms) {
+        auto it = g_bone_cache.find(player);
+        if (it != g_bone_cache.end() && now_ms - it->second.refreshed_ms < 100)
+            return it->second.data;
+        bone_cache_entry& entry = g_bone_cache[player];
+        entry.refreshed_ms = now_ms;
+        read_bones(player, entry.data);
+        static long long bone_log = 0;
+        if (diag::every(bone_log, 5000))
+            diag::log("BONES", "player=0x%llx mask=0x%x head=%d count=%d",
+                      (unsigned long long)player, entry.data.mask, entry.data.has_head() ? 1 : 0,
+                      __builtin_popcount(entry.data.mask));
+        return entry.data;
+    }
+
     inline HealthInfo health_info(const player_snapshot& p) noexcept {
         HealthInfo out{};
         const uint64_t stats_class = typeinfo(v100::stats_typeinfo);
