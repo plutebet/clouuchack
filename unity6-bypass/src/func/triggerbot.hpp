@@ -18,8 +18,8 @@ struct target {
     Vector3 feet;
     int hp;
     int max_hp;
-    bool visible;              // memory-based vis check (szi.mow + anim.IsVisible)
-    player::BoneData bones;    // bone positions (Head=10 for precise headshot)
+    bool visible;
+    player::BoneData bones;
 };
 
 inline float bone_radius(int bone) {
@@ -37,6 +37,64 @@ inline float bone_radius(int bone) {
     }
 }
 
+// ---- damage-feedback wallshot detection (PC-style substitute for Physics.Linecast) ----
+struct damage_state {
+    int hp_at_fire{0};
+    long long fire_ms{0};
+    long long blacklist_until{0};
+    int no_damage_streak{0};
+    bool awaiting{false};
+};
+inline std::unordered_map<uint64_t, damage_state> s_damage;
+static constexpr long long kDamageWindowMs = 400;
+static constexpr long long kBlacklistBaseMs = 2000;
+static constexpr long long kBlacklistMaxMs = 8000;
+static constexpr int kWallshotThreshold = 2;
+
+inline void update_damage(const target* targets, int count, long long now_ms) {
+    for (int i = 0; i < count; ++i) {
+        auto it = s_damage.find(targets[i].id);
+        if (it == s_damage.end() || !it->second.awaiting) continue;
+        damage_state& ds = it->second;
+        if (targets[i].hp < ds.hp_at_fire) {
+            ds.awaiting = false;
+            ds.no_damage_streak = 0;
+            ds.blacklist_until = 0;
+        } else if (now_ms - ds.fire_ms > kDamageWindowMs) {
+            ds.awaiting = false;
+            ++ds.no_damage_streak;
+            if (ds.no_damage_streak >= kWallshotThreshold) {
+                long long bl = kBlacklistBaseMs * std::min(ds.no_damage_streak - 1, 4);
+                bl = std::min(bl, kBlacklistMaxMs);
+                ds.blacklist_until = now_ms + bl;
+                diag::log("TRIGGER", "wallshot id=0x%llx hp=%d streak=%d bl=%lldms",
+                          (unsigned long long)targets[i].id, targets[i].hp,
+                          ds.no_damage_streak, bl);
+            }
+        }
+    }
+}
+
+inline bool is_blacklisted(uint64_t id, long long now_ms) {
+    auto it = s_damage.find(id);
+    return it != s_damage.end() && now_ms < it->second.blacklist_until;
+}
+
+inline void record_fire(uint64_t id, int hp, long long now_ms) {
+    damage_state& ds = s_damage[id];
+    ds.hp_at_fire = hp;
+    ds.fire_ms = now_ms;
+    ds.awaiting = true;
+}
+
+// ---- visibility timer (150ms sustained visibility) ----
+struct vis_timer_entry {
+    long long first_visible_ms{0};
+    bool tracking{false};
+};
+inline std::unordered_map<uint64_t, vis_timer_entry> s_vis_timer;
+static constexpr long long kVisConfirmMs = 150;
+
 // ---- core state ----
 inline uint64_t s_tracking = 0;
 inline long long s_since = 0;
@@ -48,12 +106,6 @@ inline uint32_t s_seq = 0;
 inline bool s_pressed = false;
 inline long long s_release_at = 0;
 inline uint32_t s_fire_count = 0;
-struct vis_timer_entry {
-    long long first_visible_ms{0};
-    bool tracking{false};
-};
-inline std::unordered_map<uint64_t, vis_timer_entry> s_vis_timer;
-static constexpr long long kVisConfirmMs = 150;
 
 inline void reset() {
     s_tracking = 0;
@@ -62,7 +114,7 @@ inline void reset() {
     s_last_confirm_seq = 0;
 }
 
-// ---- sphere hitbox (head or body center) ----
+// ---- crosshair hit test: bone sphere (screen center) ----
 inline bool hit_point(const Vector3& point, const matrix& view, const matrix& proj,
                       float radius, float& depth) {
     Vector4 cam = matrix_multiply(view, Vector4(point.x, point.y, point.z, 1.f));
@@ -84,7 +136,7 @@ inline bool hit_point(const Vector3& point, const matrix& view, const matrix& pr
     return px * px + py * py <= px_radius * px_radius;
 }
 
-// ---- full-body capsule hitbox (head to feet) ----
+// ---- crosshair hit test: capsule fallback ----
 inline bool hit_capsule(const Vector3& head, const Vector3& feet,
                         const matrix& view, const matrix& proj, float& depth) {
     Vector4 cam_h = matrix_multiply(view, Vector4(head.x, head.y, head.z, 1.f));
@@ -119,10 +171,12 @@ inline bool hit_capsule(const Vector3& head, const Vector3& feet,
     return dist2 <= half_w * half_w;
 }
 
+// ---- target selection (closest in crosshair, visible, not blacklisted) ----
 inline uint64_t plan(const target* targets, int count,
                      const matrix& view, const matrix& proj, long long now_ms) {
     ++s_seq;
 
+    // Layer 1+2: visibility timer
     if (cfg::trigger::vis_check) {
         for (int i = 0; i < count; ++i) {
             auto& vt = s_vis_timer[targets[i].id];
@@ -134,16 +188,23 @@ inline uint64_t plan(const target* targets, int count,
         }
     }
 
+    // Layer 3: damage feedback
+    update_damage(targets, count, now_ms);
+
     uint64_t chosen = 0;
     float best = 1e9f;
 
     for (int i = 0; i < count; ++i) {
         const target& t = targets[i];
 
+        // Gate: 150ms sustained visibility
         if (cfg::trigger::vis_check) {
             auto& vt = s_vis_timer[t.id];
             if (!vt.tracking || (now_ms - vt.first_visible_ms) < kVisConfirmMs) continue;
         }
+
+        // Gate: damage-feedback blacklist
+        if (is_blacklisted(t.id, now_ms)) continue;
 
         bool hit = false;
         float depth = 1e9f;
@@ -198,17 +259,26 @@ inline void tick(const target* targets, int count,
                  const matrix& view, const matrix& proj, long long now_ms) {
     static long long status_log = 0;
     if (diag::every(status_log, 3000)) {
-        diag::log("TRIGGER", "status: en=%d fire_set=%d pos=(%.0f,%.0f) tgts=%d pressed=%d fires=%u fd=%d vc=%d",
+        int blacklisted = 0;
+        for (const auto& [id, ds] : s_damage)
+            if (now_ms < ds.blacklist_until) ++blacklisted;
+        diag::log("TRIGGER", "status: en=%d fire_set=%d pos=(%.0f,%.0f) tgts=%d pressed=%d fires=%u fd=%d vc=%d bl=%d",
                   int(cfg::trigger::enabled), int(cfg::trigger::fire_set),
                   cfg::trigger::fire_x, cfg::trigger::fire_y,
                   count, int(s_pressed), s_fire_count,
-                  inject::g_fd, int(cfg::trigger::vis_check));
+                  inject::g_fd, int(cfg::trigger::vis_check), blacklisted);
 
         for (auto it = s_vis_timer.begin(); it != s_vis_timer.end(); ) {
             bool found = false;
             for (int i = 0; i < count; ++i)
                 if (targets[i].id == it->first) { found = true; break; }
             if (!found) it = s_vis_timer.erase(it); else ++it;
+        }
+        for (auto it = s_damage.begin(); it != s_damage.end(); ) {
+            bool found = false;
+            for (int i = 0; i < count; ++i)
+                if (targets[i].id == it->first) { found = true; break; }
+            if (!found) it = s_damage.erase(it); else ++it;
         }
     }
 
@@ -224,7 +294,6 @@ inline void tick(const target* targets, int count,
     }
 
     if (!cfg::trigger::fire_set) return;
-
     if (s_pressed) return;
 
     uint64_t id = plan(targets, count, view, proj, now_ms);
@@ -233,6 +302,8 @@ inline void tick(const target* targets, int count,
     int hp = 0;
     for (int i = 0; i < count; ++i)
         if (targets[i].id == id) { hp = targets[i].hp; break; }
+
+    record_fire(id, hp, now_ms);
 
     inject::tap_down(cfg::trigger::fire_x, cfg::trigger::fire_y);
     s_pressed = true;
