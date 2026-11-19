@@ -33,4 +33,13 @@ namespace trigger {
     inline bool vis_check = true;
 }
 
+namespace aim {
+    inline bool enabled = false;
+    inline float fov = 60.f;      // FOV circle radius in pixels
+    inline float smooth = 5.f;    // smoothing (higher = slower/smoother)
+    inline int target = 0;        // 0=head, 1=neck, 2=chest
+    inline bool vis_check = true;
+    inline bool show_fov = false;
+}
+
 }

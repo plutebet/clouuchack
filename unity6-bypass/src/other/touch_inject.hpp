@@ -121,6 +121,39 @@ inline void tap_up() {
     write_ev(EV_SYN, SYN_REPORT, 0);
 }
 
+// ---- aimbot touch: flick gesture on slot 8 ----
+inline void aim_flick(float dx_screen, float dy_screen) {
+    if (g_fd < 0) return;
+    if (std::fabs(dx_screen) < 0.3f && std::fabs(dy_screen) < 0.3f) return;
+
+    float base_x = g_screen_w * 0.75f;
+    float base_y = g_screen_h * 0.5f;
+
+    int32_t d1x, d1y, d2x, d2y;
+    screen_to_device(base_x, base_y, d1x, d1y);
+    screen_to_device(base_x + dx_screen, base_y + dy_screen, d2x, d2y);
+
+    static int aim_tid = 20000;
+    if (++aim_tid > 50000) aim_tid = 20000;
+
+    write_ev(EV_ABS, ABS_MT_SLOT, 8);
+    write_ev(EV_ABS, ABS_MT_TRACKING_ID, aim_tid);
+    write_ev(EV_ABS, ABS_MT_POSITION_X, d1x);
+    write_ev(EV_ABS, ABS_MT_POSITION_Y, d1y);
+    write_ev(EV_ABS, ABS_MT_TOUCH_MAJOR, 6);
+    write_ev(EV_ABS, ABS_MT_PRESSURE, 50);
+    write_ev(EV_SYN, SYN_REPORT, 0);
+
+    write_ev(EV_ABS, ABS_MT_SLOT, 8);
+    write_ev(EV_ABS, ABS_MT_POSITION_X, d2x);
+    write_ev(EV_ABS, ABS_MT_POSITION_Y, d2y);
+    write_ev(EV_SYN, SYN_REPORT, 0);
+
+    write_ev(EV_ABS, ABS_MT_SLOT, 8);
+    write_ev(EV_ABS, ABS_MT_TRACKING_ID, -1);
+    write_ev(EV_SYN, SYN_REPORT, 0);
+}
+
 inline void shutdown() {
     if (g_fd >= 0) { ::close(g_fd); g_fd = -1; }
 }

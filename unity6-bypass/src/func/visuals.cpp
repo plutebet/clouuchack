@@ -7,6 +7,7 @@
 
 #include "visuals.hpp"
 #include "triggerbot.hpp"
+#include "aimbot.hpp"
 #include "../game/game.hpp"
 #include "../game/math.hpp"
 #include "../game/player.hpp"
@@ -654,7 +655,7 @@ void visuals::draw() {
                 }
             }
 
-            bool anim_confirmed = true;
+            bool anim_confirmed = false;
             bool anim_checked = false;
             auto it = s_chc_cache.find(e.object);
             uint64_t chc = 0;
@@ -674,7 +675,9 @@ void visuals::draw() {
                     }
                 }
             }
-            t.visible = in_frustum && (anim_confirmed || !anim_checked);
+            // Strict: both frustum AND occlusion must confirm visibility.
+            // If anim data can't be read, target stays invisible (safe).
+            t.visible = in_frustum && anim_checked && anim_confirmed;
 
             trig_tgts.push_back(t);
         }
@@ -689,6 +692,24 @@ void visuals::draw() {
 
         triggerbot::tick(trig_tgts.data(), int(trig_tgts.size()),
                          ViewMatrix, ProjectionMatrix, now_ms);
+
+        // ---- aimbot (touch-flick based) ----
+        {
+            std::vector<aimbot::aim_target> aim_tgts;
+            aim_tgts.reserve(trig_tgts.size());
+            for (const auto& t : trig_tgts) {
+                aim_tgts.push_back({t.id, t.head, t.feet, t.hp, t.visible, t.bones});
+            }
+            aimbot::tick(aim_tgts.data(), int(aim_tgts.size()),
+                         ViewMatrix, ProjectionMatrix, now_ms);
+        }
+
+        // ---- aim FOV circle ----
+        if (cfg::aim::enabled && cfg::aim::show_fov) {
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+            fg->AddCircle(ImVec2(g_sw * 0.5f, g_sh * 0.5f), cfg::aim::fov,
+                          IM_COL32(255, 255, 255, 80), 48, 1.5f);
+        }
 
         // Vis-check debug log
         static long long vis_log = 0;

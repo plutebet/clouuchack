@@ -33,10 +33,10 @@ struct damage_state {
     bool awaiting{false};
 };
 inline std::unordered_map<uint64_t, damage_state> s_damage;
-static constexpr long long kDamageWindowMs = 400;
-static constexpr long long kBlacklistBaseMs = 2000;
-static constexpr long long kBlacklistMaxMs = 8000;
-static constexpr int kWallshotThreshold = 2;
+static constexpr long long kDamageWindowMs = 350;
+static constexpr long long kBlacklistBaseMs = 3000;
+static constexpr long long kBlacklistMaxMs = 10000;
+static constexpr int kWallshotThreshold = 1;
 
 inline void update_damage(const target* targets, int count, long long now_ms) {
     for (int i = 0; i < count; ++i) {
