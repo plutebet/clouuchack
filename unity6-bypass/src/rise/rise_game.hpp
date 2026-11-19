@@ -128,21 +128,59 @@ namespace rise_game {
     }
 
     // ---- PlayerManager singleton resolution ----
-    // LazySingleton: class static fields area has the singleton at offset 0x0.
-    // Il2CppClass -> staticFields pointer at a known offset, then read +0x0.
-    // For il2cpp, klass->static_fields is at a version-dependent offset.
-    // We try the common il2cpp offsets for static_fields: 0xB8, 0xB0.
+    inline long long g_last_pm_diag = 0;
+
     inline uint64_t resolve_pm_singleton() {
         const uint64_t klass = typeinfo_rise(rise::PlayerManager_TypeInfo);
         if (!klass) return 0;
-        for (uint64_t sf_off : {uint64_t(0xB8), uint64_t(0xB0), uint64_t(0xC0)}) {
+
+        const bool do_diag = diag::every(g_last_pm_diag, 5000);
+
+        if (do_diag) {
+            uint64_t slots[12]{};
+            mem_read(klass + 0x80, slots, sizeof(slots));
+            diag::log("RISE-DBG", "PM klass=0x%llx dump +0x80:", (unsigned long long)klass);
+            for (int i = 0; i < 12; i++) {
+                uint64_t v = untag(slots[i]);
+                diag::log("RISE-DBG", "  +0x%02x: raw=0x%llx untag=0x%llx plaus=%d obj=%d",
+                    0x80 + i * 8, (unsigned long long)slots[i],
+                    (unsigned long long)v, int(plausible(v)), int(obj_ptr(v)));
+            }
+        }
+
+        for (uint64_t sf_off = 0xA0; sf_off <= 0xE0; sf_off += 8) {
             const uint64_t static_fields = rptr(klass + sf_off);
             if (!plausible(static_fields)) continue;
-            const uint64_t singleton = rptr(static_fields + rise::main_camera_singleton);
+            const uint64_t singleton = rptr(static_fields + 0x0);
+            if (do_diag) {
+                diag::log("RISE-DBG", "PM sf_off=0x%llx sf=0x%llx singleton=0x%llx obj=%d",
+                    (unsigned long long)sf_off, (unsigned long long)static_fields,
+                    (unsigned long long)singleton, int(obj_ptr(singleton)));
+            }
             if (!obj_ptr(singleton)) continue;
             const uint64_t obj_klass = rptr(singleton);
+            if (do_diag) {
+                diag::log("RISE-DBG", "PM singleton->klass=0x%llx match=%d",
+                    (unsigned long long)obj_klass, int(obj_klass == klass));
+            }
             if (obj_klass == klass) return singleton;
+            // Relaxed: check if singleton has plausible PlayerManager layout
+            // (dict at +0x20, hashset at +0x28, local_player at +0x68)
+            if (obj_ptr(obj_klass)) {
+                const uint64_t dict = rptr(singleton + rise::pm_dict);
+                const uint64_t hs = rptr(singleton + rise::pm_hashset);
+                if (do_diag) {
+                    diag::log("RISE-DBG", "PM relaxed: dict=0x%llx hs=0x%llx",
+                        (unsigned long long)dict, (unsigned long long)hs);
+                }
+                if (obj_ptr(dict) && obj_ptr(hs)) {
+                    diag::log("RISE", "PM singleton found via relaxed match sf_off=0x%llx klass=0x%llx obj_klass=0x%llx",
+                        (unsigned long long)sf_off, (unsigned long long)klass, (unsigned long long)obj_klass);
+                    return singleton;
+                }
+            }
         }
+
         return 0;
     }
 
