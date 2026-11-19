@@ -939,6 +939,10 @@ namespace player {
         long long prev_ms{0};
         long long cur_ms{0};
         bool has_prev{false};
+        Vector3 velocity{};
+        float frozen_time{0.f};
+        bool stall_fallback{false};
+        float run_phase{0.f};
     };
     inline std::unordered_map<uint64_t, bone_cache_entry> g_bone_cache;
 
@@ -1030,11 +1034,46 @@ namespace player {
             }
             entry.cur_ms = now_ms;
             read_bones(player, entry.cur);
+
+            // Velocity tracking + stall detection (ported from PC EspSkeletonAnimator)
+            if (entry.has_prev && entry.cur.has(BoneHips) && entry.prev.has(BoneHips)) {
+                float dt = float(now_ms - entry.prev_ms) / 1000.f;
+                if (dt > 0.008f && dt < 0.2f) {
+                    const Vector3& ph = entry.prev.positions[BoneHips];
+                    const Vector3& ch = entry.cur.positions[BoneHips];
+                    Vector3 vel = {(ch.x - ph.x) / dt, 0.f, (ch.z - ph.z) / dt};
+                    entry.velocity = {entry.velocity.x * 0.3f + vel.x * 0.7f,
+                                      0.f,
+                                      entry.velocity.z * 0.3f + vel.z * 0.7f};
+                    float speed = std::sqrt(entry.velocity.x * entry.velocity.x +
+                                            entry.velocity.z * entry.velocity.z);
+                    if (speed > 0.6f) {
+                        float max_bone_change = 0.f;
+                        Vector3 hip_move = {ch.x - ph.x, ch.y - ph.y, ch.z - ph.z};
+                        for (int b = 0; b < kBoneCount; ++b) {
+                            if (!entry.cur.has(b) || !entry.prev.has(b)) continue;
+                            Vector3 d = entry.cur.positions[b] - entry.prev.positions[b];
+                            d = {d.x - hip_move.x, d.y - hip_move.y, d.z - hip_move.z};
+                            float dist = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+                            if (dist > max_bone_change) max_bone_change = dist;
+                        }
+                        entry.frozen_time = (max_bone_change < 0.009f) ? entry.frozen_time + dt : 0.f;
+                    } else {
+                        entry.frozen_time = 0.f;
+                    }
+                    entry.stall_fallback = entry.frozen_time >= 0.10f;
+                    if (entry.stall_fallback)
+                        entry.run_phase += speed * dt * 3.5f;
+                }
+            }
+
             static long long bone_log = 0;
             if (diag::every(bone_log, 5000))
-                diag::log("BONES", "player=0x%llx mask=0x%x head=%d count=%d",
+                diag::log("BONES", "player=0x%llx mask=0x%x head=%d count=%d vel=%.2f stall=%d",
                           (unsigned long long)player, entry.cur.mask, entry.cur.has_head() ? 1 : 0,
-                          __builtin_popcount(entry.cur.mask));
+                          __builtin_popcount(entry.cur.mask),
+                          std::sqrt(entry.velocity.x * entry.velocity.x + entry.velocity.z * entry.velocity.z),
+                          int(entry.stall_fallback));
         }
         if (!entry.has_prev || !entry.cur.mask) return entry.cur;
         const double span = double(entry.cur_ms - entry.prev_ms);

@@ -1,6 +1,8 @@
 #pragma once
 #include "../game/game.hpp"
 #include "../game/math.hpp"
+#include "../game/hitbox_defs.hpp"
+#include "../game/ballistics.hpp"
 #include "../ui/cfg.hpp"
 #include "../other/touch_inject.hpp"
 #include "../other/diag.hpp"
@@ -21,21 +23,6 @@ struct target {
     bool visible;
     player::BoneData bones;
 };
-
-inline float bone_radius(int bone) {
-    using namespace player;
-    switch (bone) {
-        case BoneHips: case BoneSpine: case BoneChest: return 0.22f;
-        case BoneNeck: return 0.14f;
-        case BoneHead: return 0.14f;
-        case BoneLeftShoulder: case BoneRightShoulder: return 0.18f;
-        case BoneLeftUpperArm: case BoneRightUpperArm:
-        case BoneLeftUpperLeg: case BoneRightUpperLeg: return 0.15f;
-        case BoneLeftLowerArm: case BoneRightLowerArm:
-        case BoneLeftLowerLeg: case BoneRightLowerLeg: return 0.12f;
-        default: return 0.10f;
-    }
-}
 
 // ---- damage-feedback wallshot detection (PC-style substitute for Physics.Linecast) ----
 struct damage_state {
@@ -106,77 +93,23 @@ inline uint32_t s_seq = 0;
 inline bool s_pressed = false;
 inline long long s_release_at = 0;
 inline uint32_t s_fire_count = 0;
+inline int s_last_hit_bone = -1;
 
 inline void reset() {
     s_tracking = 0;
     s_since = 0;
     s_confirmed = 0;
     s_last_confirm_seq = 0;
+    s_last_hit_bone = -1;
 }
 
-// ---- crosshair hit test: bone sphere (screen center) ----
-inline bool hit_point(const Vector3& point, const matrix& view, const matrix& proj,
-                      float radius, float& depth) {
-    Vector4 cam = matrix_multiply(view, Vector4(point.x, point.y, point.z, 1.f));
-    Vector4 clip = matrix_multiply(proj, cam);
-    depth = clip.w;
-    if (!std::isfinite(depth) || depth < 0.05f) return false;
-
-    float ndc_x = clip.x / depth;
-    float ndc_y = clip.y / depth;
-    if (!std::isfinite(ndc_x) || !std::isfinite(ndc_y)) return false;
-
-    float px = ndc_x * g_sw * 0.5f;
-    float py = ndc_y * g_sh * 0.5f;
-
-    const float* p = reinterpret_cast<const float*>(&proj);
-    float px_radius = std::clamp(radius * std::abs(p[0]) * g_sw * 0.5f / depth, 1.f, g_sw);
-    px_radius *= cfg::trigger::fov;
-
-    return px * px + py * py <= px_radius * px_radius;
-}
-
-// ---- crosshair hit test: capsule fallback ----
-inline bool hit_capsule(const Vector3& head, const Vector3& feet,
-                        const matrix& view, const matrix& proj, float& depth) {
-    Vector4 cam_h = matrix_multiply(view, Vector4(head.x, head.y, head.z, 1.f));
-    Vector4 clip_h = matrix_multiply(proj, cam_h);
-    if (!std::isfinite(clip_h.w) || clip_h.w < 0.05f) return false;
-
-    Vector4 cam_f = matrix_multiply(view, Vector4(feet.x, feet.y, feet.z, 1.f));
-    Vector4 clip_f = matrix_multiply(proj, cam_f);
-    if (!std::isfinite(clip_f.w) || clip_f.w < 0.05f) return false;
-
-    float hx = clip_h.x / clip_h.w * g_sw * 0.5f;
-    float hy = clip_h.y / clip_h.w * g_sh * 0.5f;
-    float fx = clip_f.x / clip_f.w * g_sw * 0.5f;
-    float fy = clip_f.y / clip_f.w * g_sh * 0.5f;
-
-    if (!std::isfinite(hx) || !std::isfinite(hy) ||
-        !std::isfinite(fx) || !std::isfinite(fy)) return false;
-
-    float dx = fx - hx, dy = fy - hy;
-    float len2 = dx * dx + dy * dy;
-    float height = std::sqrt(len2);
-
-    float half_w = std::clamp(height * 0.20f, 6.f, g_sw * 0.5f);
-    half_w *= cfg::trigger::fov;
-
-    float t = len2 > 0.001f ? std::clamp((-hx * dx + -hy * dy) / len2, 0.f, 1.f) : 0.f;
-    float cx = hx + t * dx;
-    float cy = hy + t * dy;
-    float dist2 = cx * cx + cy * cy;
-
-    depth = clip_h.w * (1.f - t) + clip_f.w * t;
-    return dist2 <= half_w * half_w;
-}
-
-// ---- target selection (closest in crosshair, visible, not blacklisted) ----
+// ---- 3D ray-hitbox target selection ----
+// Builds a ray from camera eye along the view forward direction and intersects
+// world-space hit volumes built from the game's actual collider dimensions.
 inline uint64_t plan(const target* targets, int count,
                      const matrix& view, const matrix& proj, long long now_ms) {
     ++s_seq;
 
-    // Layer 1+2: visibility timer
     if (cfg::trigger::vis_check) {
         for (int i = 0; i < count; ++i) {
             auto& vt = s_vis_timer[targets[i].id];
@@ -188,46 +121,63 @@ inline uint64_t plan(const target* targets, int count,
         }
     }
 
-    // Layer 3: damage feedback
     update_damage(targets, count, now_ms);
 
+    const float* vm = reinterpret_cast<const float*>(&view);
+    const Vector3 eye = hitbox::camera_eye(vm);
+    const Vector3 fwd = hitbox::camera_forward(vm);
+
     uint64_t chosen = 0;
-    float best = 1e9f;
+    float best_dist = 1e9f;
+    int best_bone = -1;
+
+    hitbox::HitVolume volumes[player::kBoneCount];
 
     for (int i = 0; i < count; ++i) {
         const target& t = targets[i];
 
-        // Gate: 150ms sustained visibility
         if (cfg::trigger::vis_check) {
             auto& vt = s_vis_timer[t.id];
             if (!vt.tracking || (now_ms - vt.first_visible_ms) < kVisConfirmMs) continue;
         }
 
-        // Gate: damage-feedback blacklist
         if (is_blacklisted(t.id, now_ms)) continue;
 
         bool hit = false;
-        float depth = 1e9f;
+        float hit_dist = 1e9f;
+        int hit_bone = -1;
 
         if (t.bones.mask) {
-            for (int b = 0; b < player::kBoneCount; ++b) {
-                if (!t.bones.has(b)) continue;
-                float d = 0.f;
-                if (hit_point(t.bones.positions[b], view, proj, bone_radius(b), d) && d < depth) {
-                    depth = d; hit = true;
+            // 3D ray-hitbox test against actual game collider volumes
+            int nv = hitbox::make_hit_volumes(t.bones, volumes, cfg::trigger::fov);
+            for (int v = 0; v < nv; ++v) {
+                auto d = hitbox::ray_hit_volume(eye, fwd, volumes[v]);
+                if (d && *d < hit_dist) {
+                    hit_dist = *d;
+                    hit_bone = volumes[v].bone;
+                    hit = true;
                 }
             }
-        } else {
-            hit = hit_capsule(t.head, t.feet, view, proj, depth);
+        } else if (t.head.y > t.feet.y + 0.3f) {
+            // No bones: approximate as capsule from feet to head
+            Vector3 mid = {(t.head.x + t.feet.x) * 0.5f, (t.head.y + t.feet.y) * 0.5f,
+                           (t.head.z + t.feet.z) * 0.5f};
+            float height = t.head.y - t.feet.y;
+            float radius = std::clamp(height * 0.15f, 0.1f, 0.3f) * cfg::trigger::fov;
+            auto d = hitbox::ray_capsule(eye, fwd, t.feet, t.head, radius);
+            if (d) { hit_dist = *d; hit_bone = player::BoneChest; hit = true; }
         }
 
-        if (hit && depth < best) {
-            best = depth;
+        if (hit && hit_dist < best_dist) {
+            best_dist = hit_dist;
             chosen = t.id;
+            best_bone = hit_bone;
         }
     }
 
     if (!chosen) { reset(); return 0; }
+
+    s_last_hit_bone = best_bone;
 
     if (chosen != s_tracking) {
         s_tracking = chosen;
@@ -262,11 +212,15 @@ inline void tick(const target* targets, int count,
         int blacklisted = 0;
         for (const auto& [id, ds] : s_damage)
             if (now_ms < ds.blacklist_until) ++blacklisted;
-        diag::log("TRIGGER", "status: en=%d fire_set=%d pos=(%.0f,%.0f) tgts=%d pressed=%d fires=%u fd=%d vc=%d bl=%d",
+
+        const float* vm = reinterpret_cast<const float*>(&view);
+        const Vector3 eye = hitbox::camera_eye(vm);
+        diag::log("TRIGGER", "status: en=%d fire_set=%d pos=(%.0f,%.0f) tgts=%d pressed=%d fires=%u fd=%d vc=%d bl=%d eye=(%.1f,%.1f,%.1f)",
                   int(cfg::trigger::enabled), int(cfg::trigger::fire_set),
                   cfg::trigger::fire_x, cfg::trigger::fire_y,
                   count, int(s_pressed), s_fire_count,
-                  inject::g_fd, int(cfg::trigger::vis_check), blacklisted);
+                  inject::g_fd, int(cfg::trigger::vis_check), blacklisted,
+                  eye.x, eye.y, eye.z);
 
         for (auto it = s_vis_timer.begin(); it != s_vis_timer.end(); ) {
             bool found = false;
@@ -300,8 +254,22 @@ inline void tick(const target* targets, int count,
     if (!id) return;
 
     int hp = 0;
-    for (int i = 0; i < count; ++i)
-        if (targets[i].id == id) { hp = targets[i].hp; break; }
+    float distance = 0.f;
+    for (int i = 0; i < count; ++i) {
+        if (targets[i].id == id) {
+            hp = targets[i].hp;
+            const float* vm = reinterpret_cast<const float*>(&view);
+            Vector3 eye = hitbox::camera_eye(vm);
+            Vector3 mid = {(targets[i].head.x + targets[i].feet.x) * 0.5f,
+                           (targets[i].head.y + targets[i].feet.y) * 0.5f,
+                           (targets[i].head.z + targets[i].feet.z) * 0.5f};
+            distance = calculate_distance(eye, mid);
+            break;
+        }
+    }
+
+    int bone_group = s_last_hit_bone >= 0 ? hitbox::bone_damage_group(s_last_hit_bone) : 1;
+    float est_dmg = ballistics::estimate_damage(ballistics::kDefault, bone_group, 1, distance);
 
     record_fire(id, hp, now_ms);
 
@@ -310,8 +278,8 @@ inline void tick(const target* targets, int count,
     s_release_at = now_ms + 30;
     ++s_fire_count;
 
-    diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d conf=%u",
-              s_fire_count, (unsigned long long)id, hp, s_confirmed);
+    diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d bone=%d grp=%d dist=%.1f est_dmg=%.0f conf=%u",
+              s_fire_count, (unsigned long long)id, hp, s_last_hit_bone, bone_group, distance, est_dmg, s_confirmed);
 }
 
 }
