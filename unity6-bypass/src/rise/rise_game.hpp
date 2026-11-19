@@ -21,6 +21,8 @@ namespace rise_game {
     inline uint64_t g_il2cpp_base = 0;
     inline int g_pid = -1;
     inline uint64_t g_pm_singleton = 0;
+    inline uint64_t g_pm_singleton_klass = 0;  // actual runtime klass of PM singleton
+    inline uint64_t g_pm_dict_off = rise::pm_dict; // detected dict offset within PM object
     inline uint64_t g_camera_native = 0;
     inline int g_camera_view_off = -1;
     inline int g_camera_proj_off = -1;
@@ -127,6 +129,36 @@ namespace rise_game {
         return true;
     }
 
+    // ---- String reading for class name diagnostics ----
+    inline std::string read_cstr(uint64_t addr, int max_len = 48) {
+        addr = untag(addr);
+        if (!plausible(addr)) return "?";
+        char buf[64]{};
+        if (!mem_read(addr, buf, std::min(max_len, (int)sizeof(buf) - 1))) return "?";
+        for (int i = 0; buf[i]; i++)
+            if ((unsigned char)buf[i] < 0x20 || (unsigned char)buf[i] > 0x7e) { buf[i] = 0; break; }
+        return buf[0] ? buf : "?";
+    }
+
+    inline std::string class_name(uint64_t klass) {
+        if (!obj_ptr(klass)) return "?";
+        return read_cstr(rptr(klass + 0x10));
+    }
+
+    // Check if a pointer looks like a Dictionary<int, T> by internal structure
+    inline bool looks_like_dict(uint64_t ptr, uint64_t dict_klass) {
+        if (!obj_ptr(ptr)) return false;
+        uint64_t k = rptr(ptr);
+        if (!obj_ptr(k)) return false;
+        if (dict_klass && k != dict_klass) return false;
+        uint64_t entries = rptr(ptr + rise::dict_entries);
+        if (!obj_ptr(entries)) return false;
+        int count = rpm<int>(ptr + rise::dict_count);
+        if (count < 0 || count > 1000) return false;
+        uint64_t arr_len = rpm<uint64_t>(entries + rise::array_length);
+        return arr_len >= (uint64_t)count && arr_len <= 10000;
+    }
+
     // ---- PlayerManager singleton resolution ----
     inline long long g_last_pm_diag = 0;
 
@@ -135,48 +167,84 @@ namespace rise_game {
         if (!klass) return 0;
 
         const bool do_diag = diag::every(g_last_pm_diag, 5000);
+        const uint64_t dict_klass = typeinfo_rise(rise::Dict_int_PC_TypeInfo);
 
         if (do_diag) {
-            uint64_t slots[12]{};
-            mem_read(klass + 0x80, slots, sizeof(slots));
-            diag::log("RISE-DBG", "PM klass=0x%llx dump +0x80:", (unsigned long long)klass);
-            for (int i = 0; i < 12; i++) {
-                uint64_t v = untag(slots[i]);
-                diag::log("RISE-DBG", "  +0x%02x: raw=0x%llx untag=0x%llx plaus=%d obj=%d",
-                    0x80 + i * 8, (unsigned long long)slots[i],
-                    (unsigned long long)v, int(plausible(v)), int(obj_ptr(v)));
-            }
+            diag::log("RISE-DBG", "PM klass=0x%llx name='%s'",
+                (unsigned long long)klass, class_name(klass).c_str());
+            if (dict_klass)
+                diag::log("RISE-DBG", "Dict klass=0x%llx name='%s'",
+                    (unsigned long long)dict_klass, class_name(dict_klass).c_str());
         }
 
-        for (uint64_t sf_off = 0xA0; sf_off <= 0xE0; sf_off += 8) {
+        // Scan all plausible static_fields offsets in klass structure
+        for (uint64_t sf_off = 0x80; sf_off <= 0xE0; sf_off += 8) {
             const uint64_t static_fields = rptr(klass + sf_off);
             if (!plausible(static_fields)) continue;
             const uint64_t singleton = rptr(static_fields + 0x0);
-            if (do_diag) {
-                diag::log("RISE-DBG", "PM sf_off=0x%llx sf=0x%llx singleton=0x%llx obj=%d",
-                    (unsigned long long)sf_off, (unsigned long long)static_fields,
-                    (unsigned long long)singleton, int(obj_ptr(singleton)));
-            }
             if (!obj_ptr(singleton)) continue;
             const uint64_t obj_klass = rptr(singleton);
-            if (do_diag) {
-                diag::log("RISE-DBG", "PM singleton->klass=0x%llx match=%d",
-                    (unsigned long long)obj_klass, int(obj_klass == klass));
+            if (!obj_ptr(obj_klass)) continue;
+
+            // Method 1: exact klass match
+            if (obj_klass == klass) {
+                if (do_diag) diag::log("RISE", "PM exact match sf_off=0x%llx", (unsigned long long)sf_off);
+                g_pm_dict_off = rise::pm_dict;
+                g_pm_singleton_klass = obj_klass;
+                return singleton;
             }
-            if (obj_klass == klass) return singleton;
-            // Relaxed: check if singleton has plausible PlayerManager layout
-            // (dict at +0x20, hashset at +0x28, local_player at +0x68)
-            if (obj_ptr(obj_klass)) {
-                const uint64_t dict = rptr(singleton + rise::pm_dict);
-                const uint64_t hs = rptr(singleton + rise::pm_hashset);
-                if (do_diag) {
-                    diag::log("RISE-DBG", "PM relaxed: dict=0x%llx hs=0x%llx",
-                        (unsigned long long)dict, (unsigned long long)hs);
+
+            // Method 2: structural scan — find a Dictionary field inside the singleton
+            uint64_t fields[16]{};
+            mem_read(singleton, fields, sizeof(fields));
+
+            if (do_diag) {
+                diag::log("RISE-DBG", "sf_off=0x%llx sin=0x%llx klass='%s'",
+                    (unsigned long long)sf_off, (unsigned long long)singleton,
+                    class_name(obj_klass).c_str());
+                for (int d = 0; d < 16; d++) {
+                    uint64_t v = untag(fields[d]);
+                    if (v) diag::log("RISE-DBG", "  +0x%02x: 0x%llx obj=%d",
+                        d * 8, (unsigned long long)v, int(obj_ptr(v)));
                 }
-                if (obj_ptr(dict) && obj_ptr(hs)) {
-                    diag::log("RISE", "PM singleton found via relaxed match sf_off=0x%llx klass=0x%llx obj_klass=0x%llx",
-                        (unsigned long long)sf_off, (unsigned long long)klass, (unsigned long long)obj_klass);
+            }
+
+            for (int d = 2; d < 16; d++) {
+                uint64_t f = untag(fields[d]);
+                if (looks_like_dict(f, dict_klass)) {
+                    uint64_t found_off = (uint64_t)(d * 8);
+                    diag::log("RISE", "PM dict-scan: sin=0x%llx dict_off=0x%llx sf_off=0x%llx name='%s'",
+                        (unsigned long long)singleton, (unsigned long long)found_off,
+                        (unsigned long long)sf_off, class_name(obj_klass).c_str());
+                    g_pm_dict_off = found_off;
+                    g_pm_singleton_klass = obj_klass;
                     return singleton;
+                }
+            }
+
+            // Method 3: class name contains "PlayerManager"
+            std::string name = class_name(obj_klass);
+            if (name.find("Player") != std::string::npos && name.find("Manager") != std::string::npos) {
+                diag::log("RISE", "PM name-match: sin=0x%llx sf_off=0x%llx name='%s'",
+                    (unsigned long long)singleton, (unsigned long long)sf_off, name.c_str());
+                g_pm_dict_off = rise::pm_dict;
+                g_pm_singleton_klass = obj_klass;
+                return singleton;
+            }
+
+            // Method 4: relaxed dict scan without klass requirement
+            if (!dict_klass) {
+                for (int d = 2; d < 16; d++) {
+                    uint64_t f = untag(fields[d]);
+                    if (looks_like_dict(f, 0)) {
+                        uint64_t found_off = (uint64_t)(d * 8);
+                        diag::log("RISE", "PM dict-notype: sin=0x%llx dict_off=0x%llx sf_off=0x%llx",
+                            (unsigned long long)singleton, (unsigned long long)found_off,
+                            (unsigned long long)sf_off);
+                        g_pm_dict_off = found_off;
+                        g_pm_singleton_klass = obj_klass;
+                        return singleton;
+                    }
                 }
             }
         }
@@ -219,22 +287,35 @@ namespace rise_game {
             if (!g_pm_singleton) return out;
             diag::log("RISE", "PlayerManager singleton=0x%llx", (unsigned long long)g_pm_singleton);
         }
-        // Revalidate singleton
-        const uint64_t pm_klass = typeinfo_rise(rise::PlayerManager_TypeInfo);
-        if (!pm_klass || rptr(g_pm_singleton) != pm_klass) {
+        // Revalidate singleton using detected runtime klass
+        if (!g_pm_singleton_klass || rptr(g_pm_singleton) != g_pm_singleton_klass) {
             g_pm_singleton = 0;
+            g_pm_singleton_klass = 0;
             return out;
         }
-        // Read local player
-        const uint64_t local_pc = rptr(g_pm_singleton + rise::pm_local_player);
-        // Read dictionary
-        const uint64_t dict = rptr(g_pm_singleton + rise::pm_dict);
+        // Compute field shift from detected dict offset vs expected
+        const int64_t field_shift = (int64_t)g_pm_dict_off - (int64_t)rise::pm_dict;
+        // Read local player (apply same shift)
+        const uint64_t local_pc = rptr(g_pm_singleton + rise::pm_local_player + field_shift);
+        // Read dictionary using detected offset
+        const uint64_t dict = rptr(g_pm_singleton + g_pm_dict_off);
         std::vector<uint64_t> controllers;
         if (!read_dict_players(dict, controllers)) return out;
         // Build snapshots
         const uint64_t pc_klass = typeinfo_rise(rise::PlayerController_TypeInfo);
         for (uint64_t pc : controllers) {
-            if (!pc_klass || rptr(pc) != pc_klass) continue;
+            uint64_t pc_k = rptr(pc);
+            if (!obj_ptr(pc_k)) continue;
+            // Exact match preferred; skip only if klass is clearly invalid
+            if (pc_klass && pc_k != pc_klass) {
+                // Relaxed: accept if class name contains "Player"
+                static bool warned = false;
+                if (!warned) {
+                    diag::log("RISE-DBG", "PC klass mismatch: got=0x%llx expect=0x%llx name='%s'",
+                        (unsigned long long)pc_k, (unsigned long long)pc_klass, class_name(pc_k).c_str());
+                    warned = true;
+                }
+            }
             rise_player p{};
             p.controller = pc;
             p.is_local = (pc == local_pc);
@@ -321,6 +402,8 @@ namespace rise_game {
     // ---- Reset on process change ----
     inline void reset() {
         g_pm_singleton = 0;
+        g_pm_singleton_klass = 0;
+        g_pm_dict_off = rise::pm_dict;
         g_camera_native = 0;
         g_camera_view_off = -1;
         g_camera_proj_off = -1;
