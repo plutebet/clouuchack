@@ -443,16 +443,71 @@ namespace rise_game {
             if (!g_pm_singleton) return out;
             diag::log("RISE", "PlayerManager singleton=0x%llx dict_off=0x%llx status=%s",
                 (unsigned long long)g_pm_singleton, (unsigned long long)g_pm_dict_off, g_pm_status);
+
+            // One-time PM instance dump to find actual dict offset
+            uint64_t ifields[16]{};
+            if (mem_read(g_pm_singleton, ifields, sizeof(ifields))) {
+                const uint64_t dk = typeinfo_rise(rise::Dict_int_PC_TypeInfo);
+                for (int i = 0; i < 16; i++) {
+                    uint64_t v = untag(ifields[i]);
+                    char desc[96] = "";
+                    if (obj_ptr(v)) {
+                        uint64_t vk = rptr(v);
+                        std::string cn = class_name(vk);
+                        std::snprintf(desc, sizeof(desc), " cls='%s'%s",
+                            cn.c_str(), (dk && vk == dk) ? " <<DICT>>" : "");
+                    }
+                    diag::log("RISE-DBG", "PM[+0x%02x]=0x%016llx%s%s",
+                        i*8, (unsigned long long)ifields[i],
+                        obj_ptr(v) ? " [ptr]" : (v ? "" : " [NULL]"), desc);
+                }
+            }
         }
-        // Revalidate
-        if (!g_pm_singleton_klass || rptr(g_pm_singleton) != g_pm_singleton_klass) {
-            g_pm_singleton = 0;
-            g_pm_singleton_klass = 0;
-            return out;
+        // Revalidate klass (tolerate MTE tag differences)
+        {
+            const uint64_t sk = rptr(g_pm_singleton);
+            const uint64_t expect = g_pm_singleton_klass;
+            if (!expect || (!sk && !expect) ||
+                (sk != expect && class_name(sk) != "PlayerManager")) {
+                static long long reval_log = 0;
+                if (diag::every(reval_log, 2000))
+                    diag::log("RISE-DBG", "revalidation fail: sk=0x%llx expect=0x%llx name='%s'",
+                        (unsigned long long)sk, (unsigned long long)expect, class_name(sk).c_str());
+                g_pm_singleton = 0;
+                g_pm_singleton_klass = 0;
+                return out;
+            }
+            if (sk != expect) g_pm_singleton_klass = sk;
         }
-        const int64_t field_shift = (int64_t)g_pm_dict_off - (int64_t)rise::pm_dict;
-        const uint64_t local_pc = rptr(g_pm_singleton + rise::pm_local_player + field_shift);
         const uint64_t dict = rptr(g_pm_singleton + g_pm_dict_off);
+        // Dict diagnostic (throttled)
+        {
+            static long long dict_log = 0;
+            if (diag::every(dict_log, 3000)) {
+                if (!obj_ptr(dict)) {
+                    diag::log("RISE-DBG", "dict NULL/invalid at PM+0x%llx raw=0x%llx",
+                        (unsigned long long)g_pm_dict_off, (unsigned long long)rpm<uint64_t>(g_pm_singleton + g_pm_dict_off));
+                    // Try scanning PM fields for any dict
+                    const uint64_t dk = typeinfo_rise(rise::Dict_int_PC_TypeInfo);
+                    for (uint64_t d = 0x18; d <= 0x78; d += 8) {
+                        uint64_t p = rptr(g_pm_singleton + d);
+                        if (obj_ptr(p) && dk && rptr(p) == dk) {
+                            int cnt = rpm<int>(p + rise::dict_count);
+                            diag::log("RISE-DBG", "FOUND dict at PM+0x%llx ptr=0x%llx count=%d",
+                                (unsigned long long)d, (unsigned long long)p, cnt);
+                        }
+                    }
+                } else {
+                    uint64_t dk_got = rptr(dict);
+                    int cnt = rpm<int>(dict + rise::dict_count);
+                    uint64_t ent = rptr(dict + rise::dict_entries);
+                    diag::log("RISE-DBG", "dict=0x%llx klass=0x%llx('%s') count=%d entries=0x%llx",
+                        (unsigned long long)dict, (unsigned long long)dk_got, class_name(dk_got).c_str(),
+                        cnt, (unsigned long long)ent);
+                }
+            }
+        }
+        const uint64_t local_pc = rptr(g_pm_singleton + rise::pm_local_player);
         std::vector<uint64_t> controllers;
         if (!read_dict_players(dict, controllers)) return out;
         const uint64_t pc_klass = typeinfo_rise(rise::PlayerController_TypeInfo);
