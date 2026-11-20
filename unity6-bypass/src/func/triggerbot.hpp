@@ -1,6 +1,7 @@
 #pragma once
-// Strict triggerbot: PC pinkie architecture + OBB ray test + bone-motion vis check.
+// Strict triggerbot: PC pinkie architecture + OBB ray test + damage-confirmed wall check.
 // NO fov scaling, NO fallback capsule — fires ONLY when crosshair is on a real hitbox.
+// Wall detection via damage feedback: probe shot → hit = confirmed → burst fire.
 
 #include "../game/game.hpp"
 #include "../game/math.hpp"
@@ -94,19 +95,25 @@ public:
     void force_release() { held_ = false; }
 };
 
-// ---- damage-feedback wallshot detection ----
+// ---- damage-confirmed wall detection ----
+// IsVisible and bone_fresh are unreliable in this game (both flicker for
+// occluded players). The only reliable wall check is damage feedback:
+//   New target → fire ONE probe → wait 250ms for HP drop
+//   HP dropped → confirmed visible → fire freely (burst)
+//   HP same    → wall → blacklist immediately
 struct damage_state {
     int hp_at_fire{0};
     long long fire_ms{0};
     long long blacklist_until{0};
     int no_damage_streak{0};
     bool awaiting{false};
+    bool confirmed{false};  // at least one shot hit → fire freely
 };
 
 inline std::unordered_map<uint64_t, damage_state> s_damage;
 static constexpr long long kDamageWindowMs = 250;
-static constexpr long long kBlacklistBaseMs = 1500;
-static constexpr long long kBlacklistMaxMs = 6000;
+static constexpr long long kBlacklistBaseMs = 1000;
+static constexpr long long kBlacklistMaxMs = 4000;
 
 inline void update_damage(const target* targets, int count, long long now_ms) {
     for (int i = 0; i < count; ++i) {
@@ -114,20 +121,24 @@ inline void update_damage(const target* targets, int count, long long now_ms) {
         if (it == s_damage.end() || !it->second.awaiting) continue;
         damage_state& ds = it->second;
         if (targets[i].hp < ds.hp_at_fire) {
+            // HIT — target confirmed visible, allow burst fire
             ds.awaiting = false;
             ds.no_damage_streak = 0;
             ds.blacklist_until = 0;
+            ds.confirmed = true;
+            diag::log("TRIGGER", "confirmed id=0x%llx hp=%d->%d",
+                      (unsigned long long)targets[i].id, ds.hp_at_fire, targets[i].hp);
         } else if (now_ms - ds.fire_ms > kDamageWindowMs) {
+            // MISS — wall shot, blacklist immediately
             ds.awaiting = false;
+            ds.confirmed = false;
             ++ds.no_damage_streak;
-            if (ds.no_damage_streak >= 2) {
-                long long bl = kBlacklistBaseMs * std::min(ds.no_damage_streak, 4);
-                bl = std::min(bl, kBlacklistMaxMs);
-                ds.blacklist_until = now_ms + bl;
-                diag::log("TRIGGER", "wallshot id=0x%llx hp=%d streak=%d bl=%lldms",
-                          (unsigned long long)targets[i].id, targets[i].hp,
-                          ds.no_damage_streak, bl);
-            }
+            long long bl = kBlacklistBaseMs * std::min(ds.no_damage_streak, 4);
+            bl = std::min(bl, kBlacklistMaxMs);
+            ds.blacklist_until = now_ms + bl;
+            diag::log("TRIGGER", "wallshot id=0x%llx hp=%d streak=%d bl=%lldms",
+                      (unsigned long long)targets[i].id, targets[i].hp,
+                      ds.no_damage_streak, bl);
         }
     }
 }
@@ -136,8 +147,9 @@ inline bool is_blacklisted(uint64_t id, long long now_ms) {
     auto it = s_damage.find(id);
     if (it == s_damage.end()) return false;
     if (now_ms < it->second.blacklist_until) return true;
-    // Don't fire again while still awaiting damage feedback from previous shot
-    if (it->second.awaiting) return true;
+    // Not confirmed yet: only 1 probe allowed, block until feedback
+    if (!it->second.confirmed && it->second.awaiting) return true;
+    // Confirmed: fire freely (no awaiting block)
     return false;
 }
 
@@ -148,30 +160,17 @@ inline void record_fire(uint64_t id, int hp, long long now_ms) {
     ds.awaiting = true;
 }
 
-// ---- wall check via raw bone freshness ----
-// The game stops sending fresh bone data to occluded players. We track when
-// the RAW (un-interpolated) bone positions last changed in player::g_bone_cache.
-// If they haven't changed in >200ms the player is behind a wall.
-static constexpr long long kBoneFreezeMs = 200;
-
-// ---- multi-layer visibility check ----
-inline bool is_visible(const target& t, long long now_ms) {
-    // Layer 1: szi.mow must indicate in frustum (>0)
+// ---- lightweight visibility filter ----
+// Wall detection is handled by damage feedback above. This only filters
+// targets that are definitely not in view (szi.mow == 0).
+inline bool is_visible(const target& t, long long /*now_ms*/) {
     if (t.szi.mow == 0) return false;
-
-    // Layer 2: PlayerAnimationData.IsVisible
-    if (!t.visible) return false;
-
-    // Layer 3: raw bone freshness (game stops updating occluded players)
-    if (!player::raw_bones_fresh(t.id, now_ms, kBoneFreezeMs)) return false;
-
     return true;
 }
 
 // ---- strict ray-hitbox target selection ----
-// NO fov scaling, NO fallback capsule. Only fires when crosshair is on a real hitbox.
-static constexpr float kShrinkFactor = 0.92f; // safety margin — slightly smaller than game hitboxes
-static constexpr float kMinDistance = 1.5f;    // skip targets closer than this (parallax)
+static constexpr float kShrinkFactor = 0.92f;
+static constexpr float kMinDistance = 1.5f;
 
 inline std::optional<TriggerTarget> select_trigger_target(
     const target* targets, int count,
@@ -200,17 +199,14 @@ inline std::optional<TriggerTarget> select_trigger_target(
     for (int i = 0; i < count; ++i) {
         const target& t = targets[i];
 
-        // Vis check: all layers must pass
         if (cfg::trigger::vis_check && !is_visible(t, now_ms)) continue;
         if (is_blacklisted(t.id, now_ms)) continue;
 
-        // STRICT: require real bone data, no fallback capsule
         if (!t.bones.mask) continue;
 
         // Bone data freshness: reject stale bones (>100ms old)
         if (t.bones_updated_ms > 0 && (now_ms - t.bones_updated_ms) > 100) continue;
 
-        // Build hit volumes at exact game size * shrink (strict, NO fov scaling)
         int nv = hitbox::make_hit_volumes(t.bones, volumes, kShrinkFactor);
         for (int v = 0; v < nv; ++v) {
             auto d = hitbox::ray_hit_volume(eye, fwd, volumes[v]);
@@ -222,7 +218,6 @@ inline std::optional<TriggerTarget> select_trigger_target(
 
     if (n_candidates == 0) return std::nullopt;
 
-    // Nearest hit wins (teammate blocking handled by visuals.cpp pre-filter)
     int best = 0;
     for (int i = 1; i < n_candidates; ++i)
         if (candidates[i].distance < candidates[best].distance) best = i;
@@ -245,23 +240,21 @@ inline void tick(const target* targets, int count,
                  const matrix& view, const matrix& proj, long long now_ms) {
     static long long status_log = 0;
     if (diag::every(status_log, 3000)) {
-        int blacklisted = 0, frozen = 0, awaiting = 0;
+        int blacklisted = 0, confirmed_cnt = 0, awaiting_cnt = 0;
         for (const auto& [id, ds] : s_damage) {
             if (now_ms < ds.blacklist_until) ++blacklisted;
-            if (ds.awaiting) ++awaiting;
+            if (ds.confirmed) ++confirmed_cnt;
+            if (ds.awaiting) ++awaiting_cnt;
         }
-        for (const auto& [id, bc] : player::g_bone_cache)
-            if (bc.cur.mask && (now_ms - bc.last_raw_change_ms) >= kBoneFreezeMs) ++frozen;
 
         const float* vm = reinterpret_cast<const float*>(&view);
         const Vector3 eye = hitbox::camera_eye(vm);
-        diag::log("TRIGGER", "strict: en=%d fire_set=%d tgts=%d held=%d fires=%u vc=%d bl=%d frozen=%d await=%d shrink=%.2f eye=(%.1f,%.1f,%.1f)",
+        diag::log("TRIGGER", "strict: en=%d fire_set=%d tgts=%d held=%d fires=%u vc=%d bl=%d conf=%d await=%d shrink=%.2f eye=(%.1f,%.1f,%.1f)",
                   int(cfg::trigger::enabled), int(cfg::trigger::fire_set),
                   count, int(s_fire.held()), s_fire_count,
-                  int(cfg::trigger::vis_check), blacklisted, frozen, awaiting, kShrinkFactor,
+                  int(cfg::trigger::vis_check), blacklisted, confirmed_cnt, awaiting_cnt, kShrinkFactor,
                   eye.x, eye.y, eye.z);
 
-        // Prune stale damage entries
         for (auto it = s_damage.begin(); it != s_damage.end(); ) {
             bool found = false;
             for (int i = 0; i < count; ++i) if (targets[i].id == it->first) { found = true; break; }
@@ -318,9 +311,11 @@ inline void tick(const target* targets, int count,
         s_fire.complete(act, now_ms);
         ++s_fire_count;
 
-        diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d bone=%d grp=%d dist=%.1f est_dmg=%.0f",
+        auto dit = s_damage.find(selected->id);
+        bool conf = dit != s_damage.end() && dit->second.confirmed;
+        diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d bone=%d grp=%d dist=%.1f est_dmg=%.0f conf=%d",
                   s_fire_count, (unsigned long long)selected->id, hp,
-                  selected->bone, bone_group, distance, est_dmg);
+                  selected->bone, bone_group, distance, est_dmg, int(conf));
     }
 }
 
