@@ -717,8 +717,10 @@ void visuals::draw() {
         static long long vis_log = 0;
         if (diag::every(vis_log, 3000) && !trig_tgts.empty()) {
             for (const auto& t : trig_tgts) {
-                diag::log("VISCHECK", "id=0x%llx hp=%d visible=%d",
-                          (unsigned long long)t.id, t.hp, int(t.visible));
+                bool bone_fresh = player::raw_bones_fresh(t.id, diag::now_ms(), 200);
+                diag::log("VISCHECK", "id=0x%llx hp=%d visible=%d mow=%d bone_fresh=%d",
+                          (unsigned long long)t.id, t.hp, int(t.visible),
+                          int(t.szi.mow), int(bone_fresh));
             }
         }
     }

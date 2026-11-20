@@ -105,8 +105,8 @@ struct damage_state {
 
 inline std::unordered_map<uint64_t, damage_state> s_damage;
 static constexpr long long kDamageWindowMs = 250;
-static constexpr long long kBlacklistBaseMs = 3000;
-static constexpr long long kBlacklistMaxMs = 10000;
+static constexpr long long kBlacklistBaseMs = 1500;
+static constexpr long long kBlacklistMaxMs = 6000;
 
 inline void update_damage(const target* targets, int count, long long now_ms) {
     for (int i = 0; i < count; ++i) {
@@ -120,7 +120,7 @@ inline void update_damage(const target* targets, int count, long long now_ms) {
         } else if (now_ms - ds.fire_ms > kDamageWindowMs) {
             ds.awaiting = false;
             ++ds.no_damage_streak;
-            if (ds.no_damage_streak >= 1) {
+            if (ds.no_damage_streak >= 2) {
                 long long bl = kBlacklistBaseMs * std::min(ds.no_damage_streak, 4);
                 bl = std::min(bl, kBlacklistMaxMs);
                 ds.blacklist_until = now_ms + bl;
@@ -134,7 +134,11 @@ inline void update_damage(const target* targets, int count, long long now_ms) {
 
 inline bool is_blacklisted(uint64_t id, long long now_ms) {
     auto it = s_damage.find(id);
-    return it != s_damage.end() && now_ms < it->second.blacklist_until;
+    if (it == s_damage.end()) return false;
+    if (now_ms < it->second.blacklist_until) return true;
+    // Don't fire again while still awaiting damage feedback from previous shot
+    if (it->second.awaiting) return true;
+    return false;
 }
 
 inline void record_fire(uint64_t id, int hp, long long now_ms) {
@@ -144,43 +148,11 @@ inline void record_fire(uint64_t id, int hp, long long now_ms) {
     ds.awaiting = true;
 }
 
-// ---- bone motion vis check (replaces PC's CollisionWorld wall_check) ----
-// The game's animation system stops updating bones for occluded players.
-// Track total bone movement — if bones frozen for >150ms, target is behind wall.
-struct bone_motion_entry {
-    Vector3 prev_positions[player::kBoneCount]{};
-    uint32_t prev_mask{};
-    long long last_motion_ms{};
-    bool initialized{false};
-};
-inline std::unordered_map<uint64_t, bone_motion_entry> s_bone_motion;
-static constexpr long long kBoneFreezeMs = 150;
-static constexpr float kBoneMotionThreshold = 0.002f;
-
-inline bool bones_are_moving(uint64_t id, const player::BoneData& bones, long long now_ms) {
-    auto& bm = s_bone_motion[id];
-    if (!bm.initialized || bm.prev_mask != bones.mask) {
-        bm.prev_mask = bones.mask;
-        for (int i = 0; i < player::kBoneCount; ++i)
-            bm.prev_positions[i] = bones.positions[i];
-        bm.last_motion_ms = now_ms;
-        bm.initialized = true;
-        return true;
-    }
-
-    float total_delta = 0;
-    for (int i = 0; i < player::kBoneCount; ++i) {
-        if (!(bones.mask & (1u << i))) continue;
-        Vector3 d = {bones.positions[i].x - bm.prev_positions[i].x,
-                     bones.positions[i].y - bm.prev_positions[i].y,
-                     bones.positions[i].z - bm.prev_positions[i].z};
-        total_delta += std::abs(d.x) + std::abs(d.y) + std::abs(d.z);
-        bm.prev_positions[i] = bones.positions[i];
-    }
-
-    if (total_delta > kBoneMotionThreshold) bm.last_motion_ms = now_ms;
-    return (now_ms - bm.last_motion_ms) < kBoneFreezeMs;
-}
+// ---- wall check via raw bone freshness ----
+// The game stops sending fresh bone data to occluded players. We track when
+// the RAW (un-interpolated) bone positions last changed in player::g_bone_cache.
+// If they haven't changed in >200ms the player is behind a wall.
+static constexpr long long kBoneFreezeMs = 200;
 
 // ---- multi-layer visibility check ----
 inline bool is_visible(const target& t, long long now_ms) {
@@ -190,10 +162,8 @@ inline bool is_visible(const target& t, long long now_ms) {
     // Layer 2: PlayerAnimationData.IsVisible
     if (!t.visible) return false;
 
-    // Layer 3: bone motion detection (game stops updating occluded players)
-    if (t.bones.mask) {
-        if (!bones_are_moving(t.id, t.bones, now_ms)) return false;
-    }
+    // Layer 3: raw bone freshness (game stops updating occluded players)
+    if (!player::raw_bones_fresh(t.id, now_ms, kBoneFreezeMs)) return false;
 
     return true;
 }
@@ -275,26 +245,23 @@ inline void tick(const target* targets, int count,
                  const matrix& view, const matrix& proj, long long now_ms) {
     static long long status_log = 0;
     if (diag::every(status_log, 3000)) {
-        int blacklisted = 0, frozen = 0;
-        for (const auto& [id, ds] : s_damage)
+        int blacklisted = 0, frozen = 0, awaiting = 0;
+        for (const auto& [id, ds] : s_damage) {
             if (now_ms < ds.blacklist_until) ++blacklisted;
-        for (const auto& [id, bm] : s_bone_motion)
-            if (bm.initialized && (now_ms - bm.last_motion_ms) >= kBoneFreezeMs) ++frozen;
+            if (ds.awaiting) ++awaiting;
+        }
+        for (const auto& [id, bc] : player::g_bone_cache)
+            if (bc.cur.mask && (now_ms - bc.last_raw_change_ms) >= kBoneFreezeMs) ++frozen;
 
         const float* vm = reinterpret_cast<const float*>(&view);
         const Vector3 eye = hitbox::camera_eye(vm);
-        diag::log("TRIGGER", "strict: en=%d fire_set=%d tgts=%d held=%d fires=%u vc=%d bl=%d frozen=%d shrink=%.2f eye=(%.1f,%.1f,%.1f)",
+        diag::log("TRIGGER", "strict: en=%d fire_set=%d tgts=%d held=%d fires=%u vc=%d bl=%d frozen=%d await=%d shrink=%.2f eye=(%.1f,%.1f,%.1f)",
                   int(cfg::trigger::enabled), int(cfg::trigger::fire_set),
                   count, int(s_fire.held()), s_fire_count,
-                  int(cfg::trigger::vis_check), blacklisted, frozen, kShrinkFactor,
+                  int(cfg::trigger::vis_check), blacklisted, frozen, awaiting, kShrinkFactor,
                   eye.x, eye.y, eye.z);
 
-        // Prune stale entries
-        for (auto it = s_bone_motion.begin(); it != s_bone_motion.end(); ) {
-            bool found = false;
-            for (int i = 0; i < count; ++i) if (targets[i].id == it->first) { found = true; break; }
-            if (!found) it = s_bone_motion.erase(it); else ++it;
-        }
+        // Prune stale damage entries
         for (auto it = s_damage.begin(); it != s_damage.end(); ) {
             bool found = false;
             for (int i = 0; i < count; ++i) if (targets[i].id == it->first) { found = true; break; }

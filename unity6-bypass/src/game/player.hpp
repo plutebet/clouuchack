@@ -943,6 +943,7 @@ namespace player {
         float frozen_time{0.f};
         bool stall_fallback{false};
         float run_phase{0.f};
+        long long last_raw_change_ms{0};
     };
     inline std::unordered_map<uint64_t, bone_cache_entry> g_bone_cache;
 
@@ -1035,6 +1036,21 @@ namespace player {
             entry.cur_ms = now_ms;
             read_bones(player, entry.cur);
 
+            // Track when raw bone positions actually changed (for triggerbot wall check).
+            // The game stops updating bones for occluded players — if raw data
+            // is identical between consecutive reads, the player is behind a wall.
+            if (entry.has_prev && entry.cur.mask && entry.prev.mask) {
+                float raw_delta = 0;
+                for (int b = 0; b < kBoneCount; ++b) {
+                    if (!(entry.cur.mask & entry.prev.mask & (1u << b))) continue;
+                    Vector3 d = entry.cur.positions[b] - entry.prev.positions[b];
+                    raw_delta += std::abs(d.x) + std::abs(d.y) + std::abs(d.z);
+                }
+                if (raw_delta > 0.0005f) entry.last_raw_change_ms = now_ms;
+            } else if (entry.cur.mask) {
+                entry.last_raw_change_ms = now_ms;
+            }
+
             // Velocity tracking + stall detection (ported from PC EspSkeletonAnimator)
             if (entry.has_prev && entry.cur.has(BoneHips) && entry.prev.has(BoneHips)) {
                 float dt = float(now_ms - entry.prev_ms) / 1000.f;
@@ -1090,6 +1106,14 @@ namespace player {
             }
         }
         return result;
+    }
+
+    // Check if game is actively updating a player's bones (raw data changed recently).
+    // Returns false when bones haven't changed in >threshold_ms — player is occluded.
+    inline bool raw_bones_fresh(uint64_t player, long long now_ms, long long threshold_ms = 200) {
+        auto it = g_bone_cache.find(player);
+        if (it == g_bone_cache.end() || !it->second.cur.mask) return true; // no data = assume visible
+        return (now_ms - it->second.last_raw_change_ms) < threshold_ms;
     }
 
     inline HealthInfo health_info(const player_snapshot& p) noexcept {
