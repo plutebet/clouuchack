@@ -537,60 +537,52 @@ void visuals::draw() {
             ImDrawList* dl = ImGui::GetBackgroundDrawList();
             const ImVec4& bc = cfg::esp::box_col;
             const float ba = std::clamp(bc.w * 0.7f * fade, 0.f, 1.f);
-            const ImU32 bone_col = IM_COL32(int(bc.x*255.f), int(bc.y*255.f), int(bc.z*255.f), int(ba*255.f));
+            const ImU32 hb_col = IM_COL32(int(bc.x*255.f), int(bc.y*255.f), int(bc.z*255.f), int(ba*255.f));
 
-            // When stalled (bones frozen while entity is moving), generate
-            // a procedural running animation (ported from PC EspSkeletonAnimator).
-            player::BoneData draw_bones = Enemy.bones;
-            if (Enemy.stall_fallback && Enemy.bones.has(player::BoneHips)) {
-                float speed = std::sqrt(Enemy.velocity.x * Enemy.velocity.x + Enemy.velocity.z * Enemy.velocity.z);
-                if (speed > 0.6f) {
-                    float phase = Enemy.run_phase;
-                    float sin_p = std::sin(phase), cos_p = std::cos(phase);
-                    float swing = std::clamp(speed * 0.08f, 0.05f, 0.25f);
-                    const Vector3& hips = Enemy.bones.positions[player::BoneHips];
-                    float bob = std::sin(phase * 2.f) * 0.03f;
-                    draw_bones.positions[player::BoneHips] = {hips.x, hips.y + bob, hips.z};
-                    // Legs: opposing swing
-                    if (draw_bones.has(player::BoneLeftUpperLeg))
-                        draw_bones.positions[player::BoneLeftUpperLeg].y += sin_p * swing;
-                    if (draw_bones.has(player::BoneRightUpperLeg))
-                        draw_bones.positions[player::BoneRightUpperLeg].y -= sin_p * swing;
-                    if (draw_bones.has(player::BoneLeftLowerLeg))
-                        draw_bones.positions[player::BoneLeftLowerLeg].y += sin_p * swing * 0.7f - std::max(0.f, cos_p) * swing * 0.3f;
-                    if (draw_bones.has(player::BoneRightLowerLeg))
-                        draw_bones.positions[player::BoneRightLowerLeg].y -= sin_p * swing * 0.7f - std::max(0.f, -cos_p) * swing * 0.3f;
-                    if (draw_bones.has(player::BoneLeftFoot))
-                        draw_bones.positions[player::BoneLeftFoot].y += std::max(0.f, sin_p) * swing * 0.4f;
-                    if (draw_bones.has(player::BoneRightFoot))
-                        draw_bones.positions[player::BoneRightFoot].y += std::max(0.f, -sin_p) * swing * 0.4f;
-                    // Arms: opposing swing to legs
-                    if (draw_bones.has(player::BoneLeftUpperArm))
-                        draw_bones.positions[player::BoneLeftUpperArm].y -= sin_p * swing * 0.5f;
-                    if (draw_bones.has(player::BoneRightUpperArm))
-                        draw_bones.positions[player::BoneRightUpperArm].y += sin_p * swing * 0.5f;
-                    if (draw_bones.has(player::BoneLeftLowerArm))
-                        draw_bones.positions[player::BoneLeftLowerArm].y -= sin_p * swing * 0.3f;
-                    if (draw_bones.has(player::BoneRightLowerArm))
-                        draw_bones.positions[player::BoneRightLowerArm].y += sin_p * swing * 0.3f;
-                }
-            }
-
-            for (int li = 0; li < player::kBoneLinkCount; ++li) {
-                const int a = player::kBoneLinks[li][0], b = player::kBoneLinks[li][1];
-                if (!draw_bones.has(a) || !draw_bones.has(b)) continue;
-                ImVec2 sa, sb;
-                if (!world_to_screen(draw_bones.positions[a], ViewMatrix, ProjectionMatrix, sa) ||
-                    !world_to_screen(draw_bones.positions[b], ViewMatrix, ProjectionMatrix, sb)) continue;
-                dl->AddLine(sa, sb, bone_col, 3.f);
-            }
-            if (draw_bones.has_head()) {
-                ImVec2 head_s, neck_s;
-                if (world_to_screen(draw_bones.positions[player::BoneHead], ViewMatrix, ProjectionMatrix, head_s) &&
-                    draw_bones.has(player::BoneNeck) &&
-                    world_to_screen(draw_bones.positions[player::BoneNeck], ViewMatrix, ProjectionMatrix, neck_s)) {
-                    float r = std::max(4.f, std::fabs(head_s.y - neck_s.y) * 0.7f);
-                    dl->AddCircle(head_s, r, bone_col, 12, 3.f);
+            hitbox::HitVolume volumes[player::kBoneCount];
+            int nv = hitbox::make_hit_volumes(Enemy.bones, volumes, 1.0f);
+            for (int vi = 0; vi < nv; ++vi) {
+                const hitbox::HitVolume& vol = volumes[vi];
+                if (vol.capsule) {
+                    // Capsule: draw as circle at each endpoint + connecting lines
+                    ImVec2 sa, sb;
+                    if (!world_to_screen(vol.a, ViewMatrix, ProjectionMatrix, sa) ||
+                        !world_to_screen(vol.b, ViewMatrix, ProjectionMatrix, sb)) continue;
+                    float r = std::max(2.f, std::fabs(sa.y - sb.y) * 0.3f);
+                    dl->AddCircle(sa, r, hb_col, 8, 2.f);
+                    dl->AddCircle(sb, r, hb_col, 8, 2.f);
+                    dl->AddLine(ImVec2(sa.x - r, sa.y), ImVec2(sb.x - r, sb.y), hb_col, 1.5f);
+                    dl->AddLine(ImVec2(sa.x + r, sa.y), ImVec2(sb.x + r, sb.y), hb_col, 1.5f);
+                } else {
+                    // OBB: 8 corners, 12 edges
+                    const Vector3& c = vol.center;
+                    const Vector3& hx = vol.half_axes[0];
+                    const Vector3& hy = vol.half_axes[1];
+                    const Vector3& hz = vol.half_axes[2];
+                    Vector3 corners[8];
+                    for (int ci = 0; ci < 8; ++ci) {
+                        float sx = (ci & 1) ? 1.f : -1.f;
+                        float sy = (ci & 2) ? 1.f : -1.f;
+                        float sz = (ci & 4) ? 1.f : -1.f;
+                        corners[ci] = {c.x + hx.x*sx + hy.x*sy + hz.x*sz,
+                                       c.y + hx.y*sx + hy.y*sy + hz.y*sz,
+                                       c.z + hx.z*sx + hy.z*sy + hz.z*sz};
+                    }
+                    ImVec2 sp[8];
+                    bool proj_ok = true;
+                    for (int ci = 0; ci < 8; ++ci) {
+                        if (!world_to_screen(corners[ci], ViewMatrix, ProjectionMatrix, sp[ci]))
+                            { proj_ok = false; break; }
+                    }
+                    if (!proj_ok) continue;
+                    // 12 edges of a box: 4 along each axis
+                    constexpr int edges[12][2] = {
+                        {0,1},{2,3},{4,5},{6,7},  // x-axis edges
+                        {0,2},{1,3},{4,6},{5,7},  // y-axis edges
+                        {0,4},{1,5},{2,6},{3,7},  // z-axis edges
+                    };
+                    for (const auto& e : edges)
+                        dl->AddLine(sp[e[0]], sp[e[1]], hb_col, 1.5f);
                 }
             }
         }
