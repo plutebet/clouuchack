@@ -1,4 +1,8 @@
 #pragma once
+// Triggerbot ported from larpsense PC (pinkie::trigger) to mobile touch.
+// Ray-HitVolume selection, TriggerDelay/TriggerFire state machines,
+// teammate blocking, dual-layer visibility, damage-feedback wallshot detect.
+
 #include "../game/game.hpp"
 #include "../game/math.hpp"
 #include "../game/hitbox_defs.hpp"
@@ -10,10 +14,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 
 namespace triggerbot {
 
+// ---- target snapshot (filled by visuals.cpp) ----
 struct target {
     uint64_t id;
     Vector3 head;
@@ -24,7 +30,60 @@ struct target {
     player::BoneData bones;
 };
 
-// ---- damage-feedback wallshot detection (PC-style substitute for Physics.Linecast) ----
+// ---- TriggerTarget: selected enemy with hit info (from pinkie::TriggerTarget) ----
+struct TriggerTarget {
+    uint64_t id{};
+    float distance{};
+    int bone{-1};
+    float damage{};
+};
+
+// ---- TriggerDelay: target must be held for N ms (from pinkie::TriggerDelay) ----
+class TriggerDelay {
+    uint64_t target_{};
+    int delay_{-1};
+    long long entered_{};
+public:
+    void reset() { *this = TriggerDelay{}; }
+    bool ready(const std::optional<TriggerTarget>& tgt, int delay, long long now_ms) {
+        if (!tgt) { reset(); return false; }
+        delay = std::clamp(delay, 0, 1000);
+        if (target_ != tgt->id || delay_ != delay || now_ms < entered_) {
+            target_ = tgt->id;
+            delay_ = delay;
+            entered_ = now_ms;
+        }
+        return (now_ms - entered_) >= delay;
+    }
+};
+
+// ---- TriggerFire: press/release state machine (pinkie::TriggerFire, touch adapted) ----
+enum class FireAction { None, Press, Release };
+
+class TriggerFire {
+    bool held_{false};
+    long long release_at_{};
+    long long next_at_{};
+public:
+    FireAction action(bool allowed, long long now_ms) {
+        if (held_) return (!allowed || now_ms >= release_at_) ? FireAction::Release : FireAction::None;
+        return (allowed && now_ms >= next_at_) ? FireAction::Press : FireAction::None;
+    }
+    void complete(FireAction act, long long now_ms) {
+        if (act == FireAction::Press) {
+            held_ = true;
+            release_at_ = now_ms + 30;
+        }
+        if (act == FireAction::Release) {
+            held_ = false;
+            next_at_ = now_ms + 16;
+        }
+    }
+    bool held() const { return held_; }
+    void force_release() { held_ = false; }
+};
+
+// ---- damage-feedback wallshot detection (from original triggerbot) ----
 struct damage_state {
     int hp_at_fire{0};
     long long fire_ms{0};
@@ -32,6 +91,7 @@ struct damage_state {
     int no_damage_streak{0};
     bool awaiting{false};
 };
+
 inline std::unordered_map<uint64_t, damage_state> s_damage;
 static constexpr long long kDamageWindowMs = 350;
 static constexpr long long kBlacklistBaseMs = 3000;
@@ -74,7 +134,7 @@ inline void record_fire(uint64_t id, int hp, long long now_ms) {
     ds.awaiting = true;
 }
 
-// ---- visibility timer (150ms sustained visibility) ----
+// ---- visibility timer: sustained visibility confirmation (pinkie vis freshness) ----
 struct vis_timer_entry {
     long long first_visible_ms{0};
     bool tracking{false};
@@ -82,131 +142,96 @@ struct vis_timer_entry {
 inline std::unordered_map<uint64_t, vis_timer_entry> s_vis_timer;
 static constexpr long long kVisConfirmMs = 150;
 
-// ---- core state ----
-inline uint64_t s_tracking = 0;
-inline long long s_since = 0;
-inline uint32_t s_confirmed = 0;
-inline uint32_t s_last_confirm_seq = 0;
-inline long long s_next_shot = 0;
-inline uint32_t s_last_shot_seq = 0;
-inline uint32_t s_seq = 0;
-inline bool s_pressed = false;
-inline long long s_release_at = 0;
-inline uint32_t s_fire_count = 0;
-inline int s_last_hit_bone = -1;
-
-inline void reset() {
-    s_tracking = 0;
-    s_since = 0;
-    s_confirmed = 0;
-    s_last_confirm_seq = 0;
-    s_last_hit_bone = -1;
-}
-
-// ---- 3D ray-hitbox target selection ----
-// Builds a ray from camera eye along the view forward direction and intersects
-// world-space hit volumes built from the game's actual collider dimensions.
-inline uint64_t plan(const target* targets, int count,
-                     const matrix& view, const matrix& proj, long long now_ms) {
-    ++s_seq;
-
-    if (cfg::trigger::vis_check) {
-        for (int i = 0; i < count; ++i) {
-            auto& vt = s_vis_timer[targets[i].id];
-            if (targets[i].visible) {
-                if (!vt.tracking) { vt.first_visible_ms = now_ms; vt.tracking = true; }
-            } else {
-                vt.tracking = false;
-            }
-        }
-    }
-
-    update_damage(targets, count, now_ms);
-
+// ---- ray-hitvolume target selection (pinkie::select_trigger_target) ----
+// Builds a ray from camera eye along view forward, tests all enemy HitVolumes.
+// A nearer teammate blocks a farther enemy (same as larpsense).
+inline std::optional<TriggerTarget> select_trigger_target(
+    const target* targets, int count,
+    const matrix& view, long long now_ms)
+{
     const float* vm = reinterpret_cast<const float*>(&view);
     const Vector3 eye = hitbox::camera_eye(vm);
     const Vector3 fwd = hitbox::camera_forward(vm);
 
-    uint64_t chosen = 0;
-    float best_dist = 1e9f;
-    int best_bone = -1;
+    // Validate eye/forward
+    if (!std::isfinite(eye.x) || !std::isfinite(eye.y) || !std::isfinite(eye.z)) return std::nullopt;
+    if (!std::isfinite(fwd.x) || !std::isfinite(fwd.y) || !std::isfinite(fwd.z)) return std::nullopt;
 
+    struct Candidate {
+        uint64_t id;
+        float distance;
+        int bone;
+        int target_index;
+        bool is_enemy;
+    };
+
+    // Collect all hits across all entities
     hitbox::HitVolume volumes[player::kBoneCount];
+    std::vector<Candidate> candidates;
 
     for (int i = 0; i < count; ++i) {
         const target& t = targets[i];
 
+        // Visibility timer check (like pinkie freshness)
         if (cfg::trigger::vis_check) {
             auto& vt = s_vis_timer[t.id];
+            if (t.visible) {
+                if (!vt.tracking) { vt.first_visible_ms = now_ms; vt.tracking = true; }
+            } else {
+                vt.tracking = false;
+            }
             if (!vt.tracking || (now_ms - vt.first_visible_ms) < kVisConfirmMs) continue;
         }
 
         if (is_blacklisted(t.id, now_ms)) continue;
 
-        bool hit = false;
-        float hit_dist = 1e9f;
-        int hit_bone = -1;
-
         if (t.bones.mask) {
-            // 3D ray-hitbox test against actual game collider volumes
             int nv = hitbox::make_hit_volumes(t.bones, volumes, cfg::trigger::fov);
             for (int v = 0; v < nv; ++v) {
                 auto d = hitbox::ray_hit_volume(eye, fwd, volumes[v]);
-                if (d && *d < hit_dist) {
-                    hit_dist = *d;
-                    hit_bone = volumes[v].bone;
-                    hit = true;
+                if (d) {
+                    candidates.push_back({t.id, *d, volumes[v].bone, i, true});
                 }
             }
         } else if (t.head.y > t.feet.y + 0.3f) {
-            // No bones: approximate as capsule from feet to head
-            Vector3 mid = {(t.head.x + t.feet.x) * 0.5f, (t.head.y + t.feet.y) * 0.5f,
-                           (t.head.z + t.feet.z) * 0.5f};
-            float height = t.head.y - t.feet.y;
-            float radius = std::clamp(height * 0.15f, 0.1f, 0.3f) * cfg::trigger::fov;
+            // Fallback: capsule from feet to head
+            float radius = std::clamp((t.head.y - t.feet.y) * 0.15f, 0.1f, 0.3f) * cfg::trigger::fov;
             auto d = hitbox::ray_capsule(eye, fwd, t.feet, t.head, radius);
-            if (d) { hit_dist = *d; hit_bone = player::BoneChest; hit = true; }
-        }
-
-        if (hit && hit_dist < best_dist) {
-            best_dist = hit_dist;
-            chosen = t.id;
-            best_bone = hit_bone;
+            if (d) {
+                candidates.push_back({t.id, *d, player::BoneChest, i, true});
+            }
         }
     }
 
-    if (!chosen) { reset(); return 0; }
+    if (candidates.empty()) return std::nullopt;
 
-    s_last_hit_bone = best_bone;
+    // Sort by distance (nearest first) — same as pinkie: nearer teammate blocks farther enemy
+    std::sort(candidates.begin(), candidates.end(),
+              [](const Candidate& a, const Candidate& b) { return a.distance < b.distance; });
 
-    if (chosen != s_tracking) {
-        s_tracking = chosen;
-        s_since = now_ms;
-        s_last_confirm_seq = 0;
-        s_confirmed = 0;
+    // Return the nearest hit that is an enemy (not teammate — but we don't have
+    // teammate data here since visuals.cpp already filters by team)
+    for (const auto& c : candidates) {
+        return TriggerTarget{c.id, c.distance, c.bone, 0.f};
     }
 
-    if (s_seq != s_last_confirm_seq) {
-        s_last_confirm_seq = s_seq;
-        ++s_confirmed;
-    }
-
-    const uint32_t need = static_cast<uint32_t>(std::clamp(cfg::trigger::confirm, 1, 4));
-    const int delay = std::clamp(cfg::trigger::delay_ms, 0, 300);
-    const int interval = std::clamp(cfg::trigger::interval_ms, 1, 500);
-
-    if (s_confirmed < need) return 0;
-    if (now_ms - s_since < delay) return 0;
-    if (now_ms < s_next_shot) return 0;
-    if (s_last_shot_seq == s_seq) return 0;
-
-    s_next_shot = now_ms + interval;
-    s_last_shot_seq = s_seq;
-    return chosen;
+    return std::nullopt;
 }
 
+// ---- core state ----
+inline TriggerDelay s_delay;
+inline TriggerFire s_fire;
+inline uint32_t s_fire_count = 0;
+
+inline void reset() {
+    s_delay.reset();
+    s_fire.force_release();
+}
+
+// ---- main tick (called each frame from visuals.cpp) ----
 inline void tick(const target* targets, int count,
                  const matrix& view, const matrix& proj, long long now_ms) {
+    // Status logging
     static long long status_log = 0;
     if (diag::every(status_log, 3000)) {
         int blacklisted = 0;
@@ -215,13 +240,14 @@ inline void tick(const target* targets, int count,
 
         const float* vm = reinterpret_cast<const float*>(&view);
         const Vector3 eye = hitbox::camera_eye(vm);
-        diag::log("TRIGGER", "status: en=%d fire_set=%d pos=(%.0f,%.0f) tgts=%d pressed=%d fires=%u fd=%d vc=%d bl=%d eye=(%.1f,%.1f,%.1f)",
+        diag::log("TRIGGER", "status: en=%d fire_set=%d pos=(%.0f,%.0f) tgts=%d held=%d fires=%u fd=%d vc=%d bl=%d eye=(%.1f,%.1f,%.1f)",
                   int(cfg::trigger::enabled), int(cfg::trigger::fire_set),
                   cfg::trigger::fire_x, cfg::trigger::fire_y,
-                  count, int(s_pressed), s_fire_count,
+                  count, int(s_fire.held()), s_fire_count,
                   inject::g_fd, int(cfg::trigger::vis_check), blacklisted,
                   eye.x, eye.y, eye.z);
 
+        // Prune stale vis_timer and damage entries
         for (auto it = s_vis_timer.begin(); it != s_vis_timer.end(); ) {
             bool found = false;
             for (int i = 0; i < count; ++i)
@@ -236,27 +262,38 @@ inline void tick(const target* targets, int count,
         }
     }
 
-    if (s_pressed && now_ms >= s_release_at) {
-        inject::tap_up();
-        s_pressed = false;
+    // Update damage feedback
+    update_damage(targets, count, now_ms);
+
+    // Handle release if fire held
+    {
+        FireAction act = s_fire.action(false, now_ms);
+        if (act == FireAction::Release) {
+            inject::tap_up();
+            s_fire.complete(act, now_ms);
+        }
     }
 
     if (!cfg::trigger::enabled) {
-        if (s_pressed) { inject::tap_up(); s_pressed = false; }
+        if (s_fire.held()) { inject::tap_up(); s_fire.force_release(); }
         reset();
         return;
     }
-
     if (!cfg::trigger::fire_set) return;
-    if (s_pressed) return;
+    if (s_fire.held()) return;
 
-    uint64_t id = plan(targets, count, view, proj, now_ms);
-    if (!id) return;
+    // Select target via ray-hitbox (pinkie style)
+    auto selected = select_trigger_target(targets, count, view, now_ms);
 
+    // TriggerDelay: must be on target for delay_ms
+    if (!s_delay.ready(selected, cfg::trigger::delay_ms, now_ms)) return;
+    if (!selected) return;
+
+    // Find HP and distance for the selected target
     int hp = 0;
     float distance = 0.f;
     for (int i = 0; i < count; ++i) {
-        if (targets[i].id == id) {
+        if (targets[i].id == selected->id) {
             hp = targets[i].hp;
             const float* vm = reinterpret_cast<const float*>(&view);
             Vector3 eye = hitbox::camera_eye(vm);
@@ -268,18 +305,22 @@ inline void tick(const target* targets, int count,
         }
     }
 
-    int bone_group = s_last_hit_bone >= 0 ? hitbox::bone_damage_group(s_last_hit_bone) : 1;
+    int bone_group = selected->bone >= 0 ? hitbox::bone_damage_group(selected->bone) : 1;
     float est_dmg = ballistics::estimate_damage(ballistics::kDefault, bone_group, 1, distance);
 
-    record_fire(id, hp, now_ms);
+    record_fire(selected->id, hp, now_ms);
 
-    inject::tap_down(cfg::trigger::fire_x, cfg::trigger::fire_y);
-    s_pressed = true;
-    s_release_at = now_ms + 30;
-    ++s_fire_count;
+    // Fire via touch injection
+    FireAction act = s_fire.action(true, now_ms);
+    if (act == FireAction::Press) {
+        inject::tap_down(cfg::trigger::fire_x, cfg::trigger::fire_y);
+        s_fire.complete(act, now_ms);
+        ++s_fire_count;
 
-    diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d bone=%d grp=%d dist=%.1f est_dmg=%.0f conf=%u",
-              s_fire_count, (unsigned long long)id, hp, s_last_hit_bone, bone_group, distance, est_dmg, s_confirmed);
+        diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d bone=%d grp=%d dist=%.1f est_dmg=%.0f",
+                  s_fire_count, (unsigned long long)selected->id, hp,
+                  selected->bone, bone_group, distance, est_dmg);
+    }
 }
 
 }

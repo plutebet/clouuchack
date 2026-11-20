@@ -373,11 +373,7 @@ namespace ui::menu {
             int_slider_row(dl, "Delay", &cfg::trigger::delay_ms, 0, 300, c, cw, row, a, k, live);
             c.y += row;
 
-            int_slider_row(dl, "Interval", &cfg::trigger::interval_ms, 10, 500, c, cw, row, a, k, live);
-            c.y += row;
-
-            int_slider_row(dl, "Confirm", &cfg::trigger::confirm, 1, 4, c, cw, row, a, k, live);
-            c.y += row;
+            // Interval/confirm removed — TriggerFire state machine handles timing
 
             toggle_row(dl, "Vis Check", &cfg::trigger::vis_check, c, cw, row, a, k, live);
         }

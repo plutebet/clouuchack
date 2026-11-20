@@ -23,9 +23,7 @@ namespace trigger {
     inline bool enabled = false;
     inline float fov = 1.0f;
     inline int delay_ms = 0;
-    inline int interval_ms = 50;
-    inline int confirm = 1;
-    inline int region = 0;  // legacy, unused — bones check all 19 joints
+    // interval/confirm/region removed — TriggerFire/TriggerDelay state machines handle timing
     inline float fire_x = 0.f;
     inline float fire_y = 0.f;
     inline bool fire_set = false;
