@@ -96,24 +96,28 @@ public:
 };
 
 // ---- damage-confirmed wall detection ----
-// IsVisible and bone_fresh are unreliable in this game (both flicker for
-// occluded players). The only reliable wall check is damage feedback:
-//   New target → fire ONE probe → wait 250ms for HP drop
-//   HP dropped → confirmed visible → fire freely (burst)
-//   HP same    → wall → blacklist immediately
+// IsVisible flickers but is false MOST of the time for occluded targets.
+// Use it as a gate for probes: only shoot unconfirmed targets when IsVisible=true.
+// Confirmed targets (damage verified) fire freely.
+// Exponential blacklist: persistent wall targets get banned for 30s after 4 misses.
 struct damage_state {
     int hp_at_fire{0};
     long long fire_ms{0};
     long long blacklist_until{0};
     int no_damage_streak{0};
     bool awaiting{false};
-    bool confirmed{false};  // at least one shot hit → fire freely
+    bool confirmed{false};
 };
 
 inline std::unordered_map<uint64_t, damage_state> s_damage;
 static constexpr long long kDamageWindowMs = 250;
-static constexpr long long kBlacklistBaseMs = 1000;
-static constexpr long long kBlacklistMaxMs = 4000;
+
+inline long long blacklist_for_streak(int streak) {
+    if (streak <= 1) return 2000;
+    if (streak == 2) return 5000;
+    if (streak == 3) return 15000;
+    return 30000;
+}
 
 inline void update_damage(const target* targets, int count, long long now_ms) {
     for (int i = 0; i < count; ++i) {
@@ -121,7 +125,6 @@ inline void update_damage(const target* targets, int count, long long now_ms) {
         if (it == s_damage.end() || !it->second.awaiting) continue;
         damage_state& ds = it->second;
         if (targets[i].hp < ds.hp_at_fire) {
-            // HIT — target confirmed visible, allow burst fire
             ds.awaiting = false;
             ds.no_damage_streak = 0;
             ds.blacklist_until = 0;
@@ -129,12 +132,10 @@ inline void update_damage(const target* targets, int count, long long now_ms) {
             diag::log("TRIGGER", "confirmed id=0x%llx hp=%d->%d",
                       (unsigned long long)targets[i].id, ds.hp_at_fire, targets[i].hp);
         } else if (now_ms - ds.fire_ms > kDamageWindowMs) {
-            // MISS — wall shot, blacklist immediately
             ds.awaiting = false;
             ds.confirmed = false;
             ++ds.no_damage_streak;
-            long long bl = kBlacklistBaseMs * std::min(ds.no_damage_streak, 4);
-            bl = std::min(bl, kBlacklistMaxMs);
+            long long bl = blacklist_for_streak(ds.no_damage_streak);
             ds.blacklist_until = now_ms + bl;
             diag::log("TRIGGER", "wallshot id=0x%llx hp=%d streak=%d bl=%lldms",
                       (unsigned long long)targets[i].id, targets[i].hp,
@@ -147,9 +148,7 @@ inline bool is_blacklisted(uint64_t id, long long now_ms) {
     auto it = s_damage.find(id);
     if (it == s_damage.end()) return false;
     if (now_ms < it->second.blacklist_until) return true;
-    // Not confirmed yet: only 1 probe allowed, block until feedback
     if (!it->second.confirmed && it->second.awaiting) return true;
-    // Confirmed: fire freely (no awaiting block)
     return false;
 }
 
@@ -160,11 +159,12 @@ inline void record_fire(uint64_t id, int hp, long long now_ms) {
     ds.awaiting = true;
 }
 
-// ---- lightweight visibility filter ----
-// Wall detection is handled by damage feedback above. This only filters
-// targets that are definitely not in view (szi.mow == 0).
+// ---- visibility filter: IsVisible gates probes, confirmed fire freely ----
 inline bool is_visible(const target& t, long long /*now_ms*/) {
     if (t.szi.mow == 0) return false;
+    auto it = s_damage.find(t.id);
+    if (it != s_damage.end() && it->second.confirmed) return true;
+    if (!t.visible) return false;
     return true;
 }
 
@@ -240,20 +240,25 @@ inline void tick(const target* targets, int count,
                  const matrix& view, const matrix& proj, long long now_ms) {
     static long long status_log = 0;
     if (diag::every(status_log, 3000)) {
-        int blacklisted = 0, confirmed_cnt = 0, awaiting_cnt = 0;
+        int blacklisted = 0, confirmed_cnt = 0, awaiting_cnt = 0, vis_blocked = 0;
         for (const auto& [id, ds] : s_damage) {
             if (now_ms < ds.blacklist_until) ++blacklisted;
             if (ds.confirmed) ++confirmed_cnt;
             if (ds.awaiting) ++awaiting_cnt;
         }
+        for (int i = 0; i < count; ++i) {
+            if (targets[i].szi.mow > 0 && !targets[i].visible) {
+                auto it = s_damage.find(targets[i].id);
+                if (it == s_damage.end() || !it->second.confirmed) ++vis_blocked;
+            }
+        }
 
         const float* vm = reinterpret_cast<const float*>(&view);
         const Vector3 eye = hitbox::camera_eye(vm);
-        diag::log("TRIGGER", "strict: en=%d fire_set=%d tgts=%d held=%d fires=%u vc=%d bl=%d conf=%d await=%d shrink=%.2f eye=(%.1f,%.1f,%.1f)",
-                  int(cfg::trigger::enabled), int(cfg::trigger::fire_set),
-                  count, int(s_fire.held()), s_fire_count,
-                  int(cfg::trigger::vis_check), blacklisted, confirmed_cnt, awaiting_cnt, kShrinkFactor,
-                  eye.x, eye.y, eye.z);
+        diag::log("TRIGGER", "strict: en=%d tgts=%d fires=%u bl=%d conf=%d await=%d vis_skip=%d shrink=%.2f",
+                  int(cfg::trigger::enabled),
+                  count, s_fire_count,
+                  blacklisted, confirmed_cnt, awaiting_cnt, vis_blocked, kShrinkFactor);
 
         for (auto it = s_damage.begin(); it != s_damage.end(); ) {
             bool found = false;
@@ -313,9 +318,12 @@ inline void tick(const target* targets, int count,
 
         auto dit = s_damage.find(selected->id);
         bool conf = dit != s_damage.end() && dit->second.confirmed;
-        diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d bone=%d grp=%d dist=%.1f est_dmg=%.0f conf=%d",
+        int tgt_vis = 0;
+        for (int j = 0; j < count; ++j)
+            if (targets[j].id == selected->id) { tgt_vis = int(targets[j].visible); break; }
+        diag::log("TRIGGER", "fire #%u id=0x%llx hp=%d bone=%d dist=%.1f conf=%d vis=%d",
                   s_fire_count, (unsigned long long)selected->id, hp,
-                  selected->bone, bone_group, distance, est_dmg, int(conf));
+                  selected->bone, distance, int(conf), tgt_vis);
     }
 }
 
