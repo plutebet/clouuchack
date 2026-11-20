@@ -19,6 +19,7 @@
 #include "imgui_internal.h"
 #include "Android_draw/draw.h"
 #include "fonts/menu/butterfly.h"
+#include "../game/map_world.hpp"
 #include "../other/status.hpp"
 #include <algorithm>
 #include <cmath>
@@ -370,7 +371,29 @@ namespace ui::menu {
             int_slider_row(dl, "Delay", &cfg::trigger::delay_ms, 0, 300, c, cw, row, a, k, live);
             c.y += row;
 
-            toggle_row(dl, "Vis Check", &cfg::trigger::vis_check, c, cw, row, a, k, live);
+            int_slider_row(dl, "Hold", &cfg::trigger::hold_ms, 10, 120, c, cw, row, a, k, live);
+            c.y += row;
+
+            toggle_row(dl, "Wall Check", &cfg::trigger::vis_check, c, cw, row, a, k, live);
+            c.y += row;
+
+            toggle_row(dl, "Strict", &cfg::trigger::strict, c, cw, row, a, k, live);
+            c.y += row;
+
+            toggle_row(dl, "Team Block", &cfg::trigger::block_teammates, c, cw, row, a, k, live);
+            c.y += row;
+
+            // Which collider the trigger is wall-checking against. Refreshed
+            // twice a second: status() copies a string under the map lock.
+            static std::string s_map_line = "Map: starting";
+            static long long s_map_line_ms = 0;
+            const long long now = diag::now_ms();
+            if (now - s_map_line_ms > 500) {
+                s_map_line_ms = now;
+                const std::string state = mapworld::g_tracker.status();
+                s_map_line = cfg::trigger::vis_check ? state : std::string("Map: wall check off");
+            }
+            text_at(dl, c, row, c_text_dim, a, s_map_line.c_str());
         }
 
     }

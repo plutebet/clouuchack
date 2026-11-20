@@ -12,6 +12,7 @@
 #include "../game/math.hpp"
 #include "../game/player.hpp"
 #include "../game/camera.hpp"
+#include "../game/map_world.hpp"
 #include "../game/weapon.hpp"
 #include "esp/weapon_icons.h"
 #include "../ui/theme/theme.hpp"
@@ -106,7 +107,8 @@ namespace {
 
 void visuals::draw() {
     if (!(g_sw >= 2.f) || !(g_sh >= 2.f)) return;
-    bool any = cfg::esp::box || cfg::esp::name || cfg::esp::health || cfg::esp::weapon;
+    bool any = cfg::esp::box || cfg::esp::name || cfg::esp::health || cfg::esp::weapon ||
+               cfg::trigger::enabled || cfg::aim::enabled;
     if (!any) { esp_wait("all ESP options disabled"); return; }
 
     crash::stage("render-p");
@@ -174,6 +176,7 @@ void visuals::draw() {
     // A new local NetObject means a new match or round object: the scanner
     // drops its back-off and restarts, the camera lock is re-checked at once,
     // and per-enemy state of the old match is discarded.
+    bool new_round = false;
     {
         static uint64_t last_local = 0;
         if (LocalPlayer != last_local) {
@@ -184,6 +187,7 @@ void visuals::draw() {
                 cam::on_new_match();
                 g_dead_since.clear();
                 g_motion.clear();
+                new_round = true;
             }
             last_local = LocalPlayer;
         }
@@ -246,6 +250,21 @@ void visuals::draw() {
         s_frame.push_back({&p, true});
     }
     player::read_frame(s_frame, s_batch);
+
+    // Teammates are not drawn and not shot at, but they are geometry: a
+    // teammate between the eye and an enemy cancels the shot (PC donor rule).
+    static std::vector<player::frame_player> s_block_frame;
+    static player::frame_batch s_block_batch;
+    s_block_frame.clear();
+    if (cfg::trigger::enabled && cfg::trigger::block_teammates) {
+        for (const player_snapshot& p : Players) {
+            if (p.object == LocalPlayer) continue;
+            const int team = p.team;
+            if (team == LocalTeam || (team != 1 && team != 2)) continue;
+            s_block_frame.push_back({&p, false});
+        }
+        if (!s_block_frame.empty()) player::read_frame(s_block_frame, s_block_batch);
+    }
 
     const player::PlayerPose LocalPose = s_frame[0].pose;
     const Vector3 LocalPosition = LocalPose.feet;
@@ -329,6 +348,20 @@ void visuals::draw() {
         e.distance = calculate_distance(e.position, LocalPosition);
         if (e.distance > 500.f) continue;
         frame_enemies.push_back(e);
+    }
+
+    // Ground points for the map identification: the local player plus every
+    // enemy close enough to stand on the same map volume.
+    {
+        Vector3 points[mapworld::Tracker::kMaxPoints];
+        int count = 0;
+        points[count++] = LocalPosition;
+        for (const enemy_frame& e : frame_enemies) {
+            if (count >= mapworld::Tracker::kMaxPoints) break;
+            if (e.distance > 120.f) continue;
+            points[count++] = e.position;
+        }
+        mapworld::g_tracker.update(points, count, new_round, now_ms);
     }
 
     // Straddle check against the locked native camera.
@@ -464,6 +497,13 @@ void visuals::draw() {
     }
     g_camera = selected_camera;
     selected_kind_prev = selected_kind;
+
+    // The trigger ray has to come from the matrices the game actually rendered
+    // with. Every synthetic source (main-bor / vqn-bor / ios-transform) is an
+    // approximation, and a ray built from one does not follow the crosshair —
+    // which is how a trigger ends up firing at nothing or through a wall.
+    const bool trigger_camera_ok = (selected_kind == camera_kind_main_native);
+    const matrix TriggerView = ViewMatrix;
 
 
     // Matrix fallback: when all positioned enemies fail projection with the
@@ -615,7 +655,7 @@ void visuals::draw() {
                     ImVec2(cfg::trigger::fire_x, cfg::trigger::fire_y + 6.f), IM_COL32(255, 60, 60, 160), 1.5f);
     }
 
-    // ---- triggerbot with damage-feedback vis check + wide structure scan ----
+    // ---- trigger: strict hit-volume ray + map collider wall check ----
     {
         static std::unordered_map<uint64_t, uint64_t> s_chc_cache; // enemy id -> chc ptr
         const uint64_t chc_class = typeinfo(v100::presentation_typeinfo);
@@ -630,6 +670,7 @@ void visuals::draw() {
             t.hp = e.hp;
             t.max_hp = e.max_hp;
             t.visible = false;
+            t.bones_fresh = player::raw_bones_fresh(e.object, now_ms, 200);
             t.bones = e.bones;
 
             // Bone data freshness from cache
@@ -684,8 +725,26 @@ void visuals::draw() {
             if (!found) ci = s_chc_cache.erase(ci); else ++ci;
         }
 
+        // ---- teammates as blockers + the trigger tick ----
+        std::vector<triggerbot::target> trig_blockers;
+        if (cfg::trigger::enabled && cfg::trigger::block_teammates) {
+            trig_blockers.reserve(s_block_frame.size());
+            for (const player::frame_player& bp : s_block_frame) {
+                if (!bp.snap || !bp.pose.valid) continue;
+                triggerbot::target t{};
+                t.id = bp.snap->object;
+                t.head = bp.pose.head;
+                t.feet = bp.pose.feet;
+                t.bones = player::cached_bones(t.id, now_ms);
+                if (!t.bones.mask) continue;
+                trig_blockers.push_back(t);
+            }
+        }
+
         triggerbot::tick(trig_tgts.data(), int(trig_tgts.size()),
-                         ViewMatrix, ProjectionMatrix, now_ms);
+                         trig_blockers.data(), int(trig_blockers.size()),
+                         TriggerView, trigger_camera_ok,
+                         mapworld::g_tracker.ready(), now_ms);
 
         // ---- aimbot (touch-flick based) ----
         {

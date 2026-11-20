@@ -20,6 +20,11 @@ inline int g_screen_w = 0;
 inline int g_screen_h = 0;
 inline bool g_device_portrait = false;
 inline int g_tracking_id = 10000;
+// A press must never outlive its intended hold: every tap is timestamped and
+// the render loop closes an overstayed tap even when the trigger does not get
+// a frame (early returns, menu open, lost camera).
+inline bool g_tap_active = false;
+inline long long g_tap_down_ms = 0;
 
 inline void write_ev(uint16_t type, uint16_t code, int32_t value) {
     struct input_event ev{};
@@ -92,8 +97,11 @@ inline bool init(int screen_w, int screen_h, uint8_t orientation) {
     return false;
 }
 
+inline void tap_up();
+
 inline void tap_down(float sx, float sy) {
     if (g_fd < 0) return;
+    if (g_tap_active) tap_up();   // never leak a second tracking id
     int32_t dx, dy;
     screen_to_device(sx, sy, dx, dy);
     if (++g_tracking_id > 60000) g_tracking_id = 10000;
@@ -112,6 +120,8 @@ inline void tap_down(float sx, float sy) {
     write_ev(EV_ABS, ABS_MT_TOUCH_MAJOR, 6);
     write_ev(EV_ABS, ABS_MT_PRESSURE, 50);
     write_ev(EV_SYN, SYN_REPORT, 0);
+    g_tap_active = true;
+    g_tap_down_ms = diag::now_ms();
 }
 
 inline void tap_up() {
@@ -119,6 +129,12 @@ inline void tap_up() {
     write_ev(EV_ABS, ABS_MT_SLOT, 9);
     write_ev(EV_ABS, ABS_MT_TRACKING_ID, -1);
     write_ev(EV_SYN, SYN_REPORT, 0);
+    g_tap_active = false;
+}
+
+// Called once per rendered frame, unconditionally.
+inline void watchdog(long long now_ms, long long max_hold_ms) {
+    if (g_tap_active && now_ms - g_tap_down_ms > max_hold_ms) tap_up();
 }
 
 // ---- aimbot touch: flick gesture on slot 8 ----

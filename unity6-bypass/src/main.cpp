@@ -17,6 +17,7 @@
 #include "other/frame_pacer.hpp"
 #include "game/game.hpp"
 #include "game/camera.hpp"
+#include "game/map_world.hpp"
 #include "func/visuals.hpp"
 #include "other/touch_inject.hpp"
 #include "protect/oxorany.hpp"
@@ -66,6 +67,7 @@ struct options {
     bool no_stealth = false;
     bool no_namespace = false;
     bool no_ptrace_guard = false;
+    const char* maps_dir = "assets/maps";
     const char* log_path = "/data/local/tmp/.sf_render.log";
     const char* crash_log_path = "/data/local/tmp/.sf_render_err.log";
 };
@@ -83,7 +85,7 @@ static void usage() {
     std::printf("sf_render\n"
                 "  --diag --no-launch --skip-build-check --no-lock\n"
                 "  --no-supervisor --no-pin --no-stealth --no-namespace\n"
-                "  --no-ptrace-guard --log <path> --crash-log <path>\n");
+                "  --no-ptrace-guard --log <path> --crash-log <path> --maps <dir>\n");
 }
 
 static std::string sys_prop(const char* name) {
@@ -255,6 +257,7 @@ static int run_overlay(const options& opts) {
     game::init();
     stealth::post_game_check(proc::pid);
     scanner::start();
+    mapworld::g_tracker.start(opts.maps_dir);
 
     static float alpha = 0.f;
     static bool prev = false;
@@ -343,9 +346,11 @@ static int run_overlay(const options& opts) {
         }
 
         crash::stage("render");
+        // A trigger tap must never outlive its hold, even on a frame where
+        // visuals::draw() returns early (lost camera, empty player list, menu).
+        inject::watchdog(diag::now_ms(), 400);
         const long long before_swap_us = diag::now_us();
-        beat(1);
-        const bool swapped = drawEnd();
+        beat(1);        const bool swapped = drawEnd();
         beat(0);
         const long long after_swap_us = diag::now_us();
         if (g_hb && !g_hb->first_frame.load()) g_hb->first_frame.store(1);
@@ -386,6 +391,7 @@ static int run_overlay(const options& opts) {
     diag::log("INFO", "shutting down (code=%d)", exit_code);
     inject::shutdown();
     scanner::stop();
+    mapworld::g_tracker.stop();
     // No touch / ImGui / EGL teardown here: every caller _exit()s right after
     // this returns, which drops the overlay layer. The teardown raced the
     // detached touch threads, which still hold ImGuiIO pointers.
@@ -526,6 +532,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--no-namespace")) opts.no_namespace = true;
         else if (!std::strcmp(argv[i], "--no-ptrace-guard")) opts.no_ptrace_guard = true;
         else if (!std::strcmp(argv[i], "--log") && i + 1 < argc) opts.log_path = argv[++i];
+        else if (!std::strcmp(argv[i], "--maps") && i + 1 < argc) opts.maps_dir = argv[++i];
         else if (!std::strcmp(argv[i], "--crash-log") && i + 1 < argc) opts.crash_log_path = argv[++i];
         else if (!std::strcmp(argv[i], "--help") || !std::strcmp(argv[i], "-h")) { usage(); return 0; }
         else { std::printf("unknown option %s\n", argv[i]); usage(); return 1; }

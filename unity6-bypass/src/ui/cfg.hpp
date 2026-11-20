@@ -22,11 +22,23 @@ namespace esp {
 namespace trigger {
     inline bool enabled = false;
     inline int delay_ms = 0;
+    // How long the injected finger stays down per shot. The PC donor holds a
+    // mouse button for 16 ms; a phone fire button needs a little more.
+    inline int hold_ms = 30;
     inline float fire_x = 0.f;
     inline float fire_y = 0.f;
     inline bool fire_set = false;
     inline bool picking = false;
+    // Wall check: ray-cast the eye -> hit point segment against the map
+    // collider set (assets/maps). Off = shoot at anything the crosshair touches.
     inline bool vis_check = true;
+    // Refuse to fire while no map collider is loaded. Off falls back to the
+    // game's own visibility flags, which are far weaker (see triggerbot.hpp).
+    inline bool strict = true;
+    // A teammate between the eye and the enemy cancels the shot.
+    inline bool block_teammates = true;
+    inline float min_distance = 0.f;
+    inline float max_distance = 0.f;
 }
 
 namespace aim {

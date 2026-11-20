@@ -12,6 +12,7 @@ LOCAL_SRC_FILES := \
     ../src/ui/widgets/widgets.cpp \
     ../src/func/visuals.cpp \
     ../src/protect/oxorany.cpp \
+    ../src/game/maps_embedded.S \
     ../includes/draw/Android_draw/draw.cpp \
     ../includes/draw/Android_touch/Touch.cpp \
     ../includes/draw/ImGui/imgui.cpp \
