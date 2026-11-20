@@ -82,10 +82,15 @@ namespace rise {
     inline constexpr uint64_t hierarchy_entries   = 0x18;
     inline constexpr uint64_t hierarchy_parents   = 0x20;
 
-    // ---- Il2Cpp Dictionary<int, T> internal layout ----
-    inline constexpr uint64_t dict_count       = 0x40;  // int _count
+    // ---- Il2Cpp Dictionary<int, T> internal layout (from il2cpp.h) ----
+    // Object: klass(0x00) + monitor(0x08) + Fields(0x10+)
+    // Fields: _buckets(0x10) _entries(0x18) _count(0x20) _freeList(0x24)
+    //         _freeCount(0x28) _version(0x2C) _comparer(0x30) _keys(0x38) _values(0x40)
+    inline constexpr uint64_t dict_buckets     = 0x10;  // int[] _buckets
     inline constexpr uint64_t dict_entries     = 0x18;  // Entry[] _entries
-    inline constexpr uint64_t array_length     = 0x18;  // Il2CppArray._length
+    inline constexpr uint64_t dict_count       = 0x20;  // int _count
+    inline constexpr uint64_t dict_version     = 0x2C;  // int _version
+    inline constexpr uint64_t array_length     = 0x18;  // Il2CppArray.max_length
     inline constexpr uint64_t array_data       = 0x20;  // Il2CppArray first element
 
     // Dictionary<int, PlayerController>.Entry layout (il2cpp):
