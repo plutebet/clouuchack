@@ -1,0 +1,82 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+
+#Indentation
+IndentWidth:            4
+TabWidth:               4
+UseTab:                 Never
+ColumnLimit:            0          # No limit - game code often has long offsets
+ContinuationIndentWidth: 4
+AccessModifierOffset:   -4
+IndentCaseLabels:       true
+NamespaceIndentation:   None
+
+#Pointers & References
+PointerAlignment:       Left       # DWORD* ptr (Windows/DOS style)
+ReferenceAlignment:     Left       # DWORD& ref
+
+#Braces
+BreakBeforeBraces:              Attach
+Cpp11BracedListStyle:           true
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortLambdasOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine:   false
+AllowShortBlocksOnASingleLine:  Empty
+
+#Argument / Parameter Packing
+AlignAfterOpenBracket:  Align
+BinPackArguments:       false    # One per line - easier to see offsets
+BinPackParameters:      false    # One per line - easier to see offsets
+
+#Consecutive Alignment
+AlignConsecutiveAssignments:
+  Enabled:            true
+  AcrossEmptyLines:   false
+  AcrossComments:     false
+AlignConsecutiveDeclarations:
+  Enabled:            true
+  AcrossEmptyLines:   false
+  AcrossComments:     false
+AlignConsecutiveMacros:
+  Enabled:            true
+  AcrossEmptyLines:   false
+  AcrossComments:     false
+AlignTrailingComments:
+  Kind:               Always
+  OverEmptyLines:     1
+AlignOperands:        Align
+
+# Spacing 
+SpaceBeforeParens:          ControlStatements
+SpaceAfterCStyleCast:       false
+SpacesBeforeTrailingComments: 2
+SpacesInParentheses:        false
+SpacesInAngles:             Never
+SpacesInSquareBrackets:     false
+
+#Line Breaks
+MaxEmptyLinesToKeep:            1
+KeepEmptyLinesAtTheStartOfBlocks: false
+BreakConstructorInitializers:   BeforeColon
+BreakInheritanceList:           BeforeColon
+BreakBeforeBinaryOperators:     None
+BreakBeforeTernaryOperators:    true
+
+#Includes
+SortIncludes:       false       
+IncludeBlocks:      Preserve
+
+#Misc
+FixNamespaceComments: false
+
+#Specific Types
+TypenameMacros: [
+    'UINT64', 'DWORD', 'NTSTATUS', 'PVOID', 'PEPROCESS', 
+    'HANDLE', 'HMODULE', 'LPVOID', 'LPCSTR', 'LPWSTR',
+    'DWORD64', 'DWORD32', 'BYTE', 'WORD', 'ULONG',
+    'PBYTE', 'PWORD', 'PDWORD', 'PULONG', 'PVOID64',
+    'CONTEXT', 'EXCEPTION_POINTERS', 'IMAGE_NT_HEADERS',
+    'IMAGE_DOS_HEADER', 'IMAGE_SECTION_HEADER'
+]

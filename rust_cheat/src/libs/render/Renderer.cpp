@@ -4,9 +4,11 @@
 #include <dwrite.h>
 #include <dxgi1_2.h>
 #include <d3d11.h>
+#include <wincodec.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <unordered_map>
 
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwrite.lib")
@@ -235,6 +237,14 @@ void fill_rect(Vec2 a, Vec2 b, Color col, float radius) {
     g_target->FillRectangle(D2D1::RectF(a.x, a.y, b.x, b.y), g_brush);
 }
 
+void circle(Vec2 center, float radius, Color col, float thickness) {
+  if (!g_target || !g_brush || !g_in_frame)
+    return;
+  set_brush(col);
+  g_target->DrawEllipse(D2D1::Ellipse({center.x, center.y}, radius, radius),
+                        g_brush, thickness);
+}
+
 void fill_circle(Vec2 center, float radius, Color col) {
   if (!g_target || !g_brush || !g_in_frame)
     return;
@@ -260,6 +270,76 @@ Color with_alpha(Color c, float alpha) {
 Color rgba(int r, int g, int b, int a) {
   return (uint32_t)(r & 0xFF) | ((uint32_t)(g & 0xFF) << 8) |
          ((uint32_t)(b & 0xFF) << 16) | ((uint32_t)(a & 0xFF) << 24);
+}
+
+namespace {
+
+IWICImagingFactory *wic_factory() {
+  static IWICImagingFactory *factory = nullptr;
+  if (!factory)
+    CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                     IID_PPV_ARGS(&factory));
+  return factory;
+}
+
+std::unordered_map<std::wstring, ID2D1Bitmap *> g_image_cache;
+
+ID2D1Bitmap *load_bitmap(const std::wstring &path) {
+  auto it = g_image_cache.find(path);
+  if (it != g_image_cache.end())
+    return it->second;
+
+  IWICImagingFactory *wic = wic_factory();
+  if (!wic || !g_target)
+    return nullptr;
+
+  IWICBitmapDecoder *decoder = nullptr;
+  IWICBitmapFrameDecode *frame = nullptr;
+  IWICFormatConverter *converter = nullptr;
+  ID2D1Bitmap *bitmap = nullptr;
+
+  HRESULT hr = wic->CreateDecoderFromFilename(
+      path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad,
+      &decoder);
+  if (SUCCEEDED(hr))
+    hr = decoder->GetFrame(0, &frame);
+  if (SUCCEEDED(hr))
+    hr = wic->CreateFormatConverter(&converter);
+  if (SUCCEEDED(hr))
+    hr = converter->Initialize(frame, GUID_WICPixelFormat32bppPBGRA,
+                               WICBitmapDitherTypeNone, nullptr, 0.f,
+                               WICBitmapPaletteTypeMedianCut);
+  if (SUCCEEDED(hr))
+    hr = g_target->CreateBitmapFromWicBitmap(converter, nullptr, &bitmap);
+
+  if (converter) converter->Release();
+  if (frame) frame->Release();
+  if (decoder) decoder->Release();
+
+  g_image_cache[path] = bitmap;
+  return bitmap;
+}
+
+} // namespace
+
+bool draw_image(const std::wstring &path, Vec2 pos, float size) {
+  if (!g_target || !g_in_frame)
+    return false;
+  ID2D1Bitmap *bmp = load_bitmap(path);
+  if (!bmp)
+    return false;
+  D2D1_SIZE_F bsz = bmp->GetSize();
+  if (bsz.width <= 0.f || bsz.height <= 0.f)
+    return false;
+  float scale = size / (bsz.width > bsz.height ? bsz.width : bsz.height);
+  float w = bsz.width * scale;
+  float h = bsz.height * scale;
+  g_target->DrawBitmap(bmp, D2D1::RectF(pos.x, pos.y, pos.x + w, pos.y + h));
+  return true;
+}
+
+bool preload_image(const std::wstring &path) {
+  return load_bitmap(path) != nullptr;
 }
 
 } // namespace render

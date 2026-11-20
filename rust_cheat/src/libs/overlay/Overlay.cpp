@@ -8,9 +8,9 @@
 
 #include "Overlay.h"
 
-c_overlay *overlay = nullptr;
-
 #include "../render/Renderer.h"
+
+c_overlay *overlay = nullptr;
 
 #include <algorithm>
 #include <cstdio>
