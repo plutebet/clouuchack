@@ -7,6 +7,7 @@
 #include "../other/crash.hpp"
 #include "../other/diag.hpp"
 #include "../protect/oxorany.hpp"
+#include "../func/triggerbot.hpp"
 #include "imgui.h"
 #include <cmath>
 #include <algorithm>
@@ -28,7 +29,7 @@ namespace {
             if (live.count(it->first)) ++it; else it = map.erase(it);
     }
 
-    // ---- motion interpolation (identical to SO2) ----
+    // ---- motion interpolation ----
     struct motion_sample { Vector3 feet{}; Vector3 head{}; long long t_us{0}; };
     struct motion_state {
         motion_sample prev{}, cur{};
@@ -108,11 +109,8 @@ void rise_visuals::draw() {
 
     rise_game::diag_typeinfo_once();
 
-    if (!any) {
-        draw_dbg("ESP: all toggles OFF", dbg_line++, IM_COL32(255,255,0,220));
-        static long long toff = 0;
-        if (diag::every(toff, 3000)) diag::log("RISE-DBG", "ESP toggles off box=%d name=%d hp=%d",
-            int(cfg::esp::box), int(cfg::esp::name), int(cfg::esp::health));
+    if (!any && !cfg::trigger::enabled) {
+        draw_dbg("ESP+trigger OFF", dbg_line++, IM_COL32(255,255,0,220));
         return;
     }
 
@@ -127,24 +125,28 @@ void rise_visuals::draw() {
         s_players_ms = now_ms;
     }
 
-    // TypeInfo diagnostic
+    // Status display
     {
         const uint64_t pm_klass = rise_game::typeinfo_rise(rise::PlayerManager_TypeInfo);
-        std::snprintf(dbg, sizeof(dbg), "PM klass=0x%llx pm=0x%llx players=%zu",
+        std::snprintf(dbg, sizeof(dbg), "PM klass=0x%llx pm=0x%llx [%s] p=%zu",
             (unsigned long long)pm_klass,
             (unsigned long long)rise_game::g_pm_singleton,
+            rise_game::g_pm_status,
             s_players.size());
         draw_dbg(dbg, dbg_line++);
     }
 
     if (s_players.empty()) {
-        draw_dbg("ESP: no players from PM", dbg_line++, IM_COL32(255,80,80,220));
+        const bool is_waiting = (std::strcmp(rise_game::g_pm_status, "JOIN MATCH") == 0);
+        draw_dbg(is_waiting ? "JOIN A MATCH TO START" : "ESP: resolving PM...",
+            dbg_line++,
+            is_waiting ? IM_COL32(255,200,0,220) : IM_COL32(255,80,80,220));
         static long long tpm = 0;
         if (diag::every(tpm, 3000)) {
             const uint64_t pk = rise_game::typeinfo_rise(rise::PlayerManager_TypeInfo);
-            diag::log("RISE-DBG", "no players: PM_klass=0x%llx pm_singleton=0x%llx il2cpp=0x%llx",
+            diag::log("RISE-DBG", "no players: PM_klass=0x%llx pm_singleton=0x%llx status=%s",
                 (unsigned long long)pk, (unsigned long long)rise_game::g_pm_singleton,
-                (unsigned long long)rise_game::g_il2cpp_base);
+                rise_game::g_pm_status);
         }
         return;
     }
@@ -162,8 +164,6 @@ void rise_visuals::draw() {
     for (const auto& p : s_players) if (p.is_local) { Local = &p; break; }
     if (!Local) {
         draw_dbg("ESP: no local player", dbg_line++, IM_COL32(255,80,80,220));
-        static long long tlp = 0;
-        if (diag::every(tlp, 3000)) diag::log("RISE-DBG", "no local player in %zu entries", s_players.size());
         return;
     }
     const uint8_t LocalTeam = Local->team;
@@ -195,13 +195,7 @@ void rise_visuals::draw() {
     std::snprintf(dbg, sizeof(dbg), "localpos=%s (%.1f,%.1f,%.1f)",
         pos_ok ? "OK" : "FAIL", LocalPosition.x, LocalPosition.y, LocalPosition.z);
     draw_dbg(dbg, dbg_line++, pos_ok ? IM_COL32(0,255,0,220) : IM_COL32(255,80,80,220));
-    if (!pos_ok) {
-        static long long tpos = 0;
-        if (diag::every(tpos, 3000))
-            diag::log("RISE-DBG", "localpos FAIL transform=0x%llx",
-                (unsigned long long)Local->transform);
-        return;
-    }
+    if (!pos_ok) return;
     if (!std::isfinite(LocalPosition.x) ||
         (LocalPosition.x == 0.f && LocalPosition.y == 0.f && LocalPosition.z == 0.f)) return;
 
@@ -254,7 +248,7 @@ void rise_visuals::draw() {
         if (cfg::esp::smooth) motion_render(m, sample_us, e.position, e.head);
     }
 
-    // Matrix fallback: when no enemy projects, reuse last good matrices.
+    // Matrix fallback
     {
         static matrix s_good_view{}, s_good_proj{};
         static bool s_has_good = false;
@@ -275,6 +269,35 @@ void rise_visuals::draw() {
         }
     }
 
+    // ---- Triggerbot ----
+    if (cfg::trigger::enabled && !frame_enemies.empty()) {
+        static std::vector<triggerbot::target> tgt_buf;
+        tgt_buf.clear();
+        tgt_buf.reserve(frame_enemies.size());
+        for (const auto& e : frame_enemies) {
+            if (e.team == LocalTeam) continue;
+            triggerbot::target t{};
+            t.id = e.controller;
+            t.head = e.head;
+            t.feet = e.position;
+            t.hp = e.hp;
+            t.max_hp = 100;
+            t.visible = true;
+            t.bones = {};
+            tgt_buf.push_back(t);
+        }
+        if (!tgt_buf.empty())
+            triggerbot::tick(tgt_buf.data(), (int)tgt_buf.size(), ViewMatrix, ProjectionMatrix, now_ms);
+    }
+
+    // ---- ESP drawing ----
+    if (!any) {
+        std::snprintf(dbg, sizeof(dbg), "enemies=%zu (ESP off, trigger=%s)",
+            frame_enemies.size(), cfg::trigger::enabled ? "ON" : "OFF");
+        draw_dbg(dbg, dbg_line++, IM_COL32(255,255,0,220));
+        return;
+    }
+
     crash::stage("rise-render-draw");
     struct draw_item { ImVec2 min, max; float cx; const enemy_frame* e; };
     std::vector<draw_item> items;
@@ -293,7 +316,9 @@ void rise_visuals::draw() {
         items.push_back({mn, mx, cx, &Enemy});
     }
 
-    std::snprintf(dbg, sizeof(dbg), "enemies=%zu projected=%zu", frame_enemies.size(), items.size());
+    std::snprintf(dbg, sizeof(dbg), "enemies=%zu projected=%zu trig=%s",
+        frame_enemies.size(), items.size(),
+        cfg::trigger::enabled ? "ON" : "off");
     draw_dbg(dbg, dbg_line++, items.empty() ? IM_COL32(255,255,0,220) : IM_COL32(0,255,0,220));
 
     std::sort(items.begin(), items.end(),
@@ -315,8 +340,9 @@ void rise_visuals::draw() {
 
     static long long frame_log = 0;
     if (diag::every(frame_log, 5000))
-        diag::log("RISE", "frame players=%zu enemies=%zu projected=%zu local_team=%d",
-                  s_players.size(), frame_enemies.size(), items.size(), int(LocalTeam));
+        diag::log("RISE", "frame players=%zu enemies=%zu projected=%zu local_team=%d trig=%d",
+                  s_players.size(), frame_enemies.size(), items.size(), int(LocalTeam),
+                  int(cfg::trigger::enabled));
 }
 
 void rise_visuals::dbox(const ImVec2& t, const ImVec2& b, float a) {
