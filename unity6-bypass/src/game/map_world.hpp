@@ -29,6 +29,7 @@
 
 #include "map_bounds.hpp"
 #include "maps_embedded.hpp"
+#include "trigger_params.hpp"
 #include "../other/diag.hpp"
 #include "../other/vector3.h"
 
@@ -53,7 +54,7 @@ namespace mapworld {
 
 // Unity layer of the meshes the game's bullets collide with. Layer 15 is
 // render-only dynamic occluders and must not block a shot.
-inline constexpr uint32_t kBulletLayer = 14;
+inline constexpr uint32_t kBulletLayer = trigger_params::kBulletLayer;
 inline constexpr uint32_t kUnknownMaterial = 0xffffffffu;
 
 struct Tri {
@@ -355,16 +356,34 @@ public:
         if (g_thread.joinable()) g_thread.join();
         std::lock_guard<std::mutex> lock(mutex_);
         world_.reset();
+        for (int i = 0; i < kMapCount; ++i) {
+            cache_[i].reset();
+            cache_state_[i] = 0;
+            drops_[i].store(0);
+            votes_[i] = 0;
+        }
         published_name_.clear();
         status_ = "map: stopped";
     }
 
     // Something about the loaded map does not hold (shots through walls that
-    // the map called clear did no damage). Drop it and look again.
+    // the map called clear did no damage). Drop it and look again — but a map
+    // that keeps failing this way is not coming back: after kMaxDropsPerMap
+    // rounds of pick -> drop -> pick it is left out, and the log says so.
     void invalidate(const char* reason) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!world_) return;
-        diag::log("MAP", "dropping %s: %s", published_name_.c_str(), reason ? reason : "unspecified");
+        const std::string dropped = published_name_;
+        for (int i = 0; i < kMapCount; ++i) {
+            if (dropped == kMaps[i].name) {
+                const unsigned n = ++drops_[i];
+                if (n >= unsigned(trigger_params::kMaxDropsPerMap))
+                    diag::log("MAP", "%s dropped %u times, not offering it again",
+                              kMaps[i].name, n);
+                break;
+            }
+        }
+        diag::log("MAP", "dropping %s: %s", dropped.c_str(), reason ? reason : "unspecified");
         world_.reset();
         published_name_.clear();
         status_ = "map: re-checking";
@@ -426,30 +445,74 @@ private:
                point.z >= box.lo[2] - margin && point.z <= box.hi[2] + margin;
     }
 
-    static bool accept_score(int matched, int examined) {
-        if (examined <= 0) return false;
-        // One matching ground probe is not proof: an overlapping map can have a
-        // floor at the same height. Two different players agreeing is.
-        return matched >= 2 && matched * 2 >= examined;
+    // Result of the ground probe for one candidate map.
+    struct ProbeStats {
+        int matched{0};        // points whose feet land on this map's floor
+        int examined{0};       // points that were not zeroed out
+        int local_matched{0};  // points[0] (the local player) matched
+        float local_delta{0.f};// local feet height above that floor
+        float residual{1e30f}; // mean |feet - floor| over the matched points
+    };
+
+    static int index_of(const std::string& name) {
+        for (int i = 0; i < kMapCount; ++i)
+            if (name == kMaps[i].name) return i;
+        return -1;
     }
 
-    static int probe(const World& world, const float (*points)[3], int count, int* matched_out) {
-        int matched = 0;
-        int examined = 0;
+    static ProbeStats probe(const World& world, const float (*points)[3], int count) {
+        ProbeStats stats;
+        float sum = 0.f;
         for (int i = 0; i < count; ++i) {
             const Vector3 feet{points[i][0], points[i][1], points[i][2]};
             if (feet.x == 0.f && feet.y == 0.f && feet.z == 0.f) continue;
-            ++examined;
+            ++stats.examined;
             float distance = 0.f;
-            if (!world.blocked(Vector3{feet.x, feet.y + 0.40f, feet.z},
-                               Vector3{feet.x, feet.y - 1.50f, feet.z}, &distance)) continue;
-            if (distance >= 0.20f && distance <= 0.60f) ++matched;
+            const Vector3 from{feet.x, feet.y + trigger_params::kProbeUp, feet.z};
+            const Vector3 to{feet.x, feet.y - trigger_params::kProbeDown, feet.z};
+            if (!world.blocked(from, to, &distance)) continue;
+            // distance runs from feet+up, so this is (feet.y - floor.y): how far
+            // the feet sit above the floor this map claims.
+            const float delta = distance - trigger_params::kProbeUp;
+            if (i == 0) stats.local_delta = delta;
+            if (delta < trigger_params::kFloorMin || delta > trigger_params::kFloorMax) continue;
+            ++stats.matched;
+            sum += std::fabs(delta);
+            if (i == 0) stats.local_matched = 1;
         }
-        if (matched_out) *matched_out = matched;
-        return examined;
+        if (stats.matched > 0) stats.residual = sum / float(stats.matched);
+        return stats;
     }
 
-    void publish(std::unique_ptr<World> world, const char* reason) {
+    // Parsed worlds are kept for the process lifetime. Before this cache a
+    // failed detection re-parsed four maps every six seconds; the 2026-11-21
+    // session did 892 full parses of the same four assets in twenty minutes,
+    // which is where the periodic hitches came from.
+    std::shared_ptr<World> load_cached(int index) {
+        if (index < 0 || index >= kMapCount) return nullptr;
+        if (cache_state_[index] == 2) return nullptr;
+        if (cache_state_[index] == 1) return cache_[index];
+        auto world = std::make_shared<World>();
+        const MapEntry& entry = kMaps[index];
+        bool ok = false;
+        const EmbeddedMap* blob = find_embedded(entry.name);
+        if (blob && blob->data && blob->size)
+            ok = world->load_memory(blob->data, blob->size, entry.name);
+        if (!ok) {
+            const std::string path = directory_ + "/" + entry.name + ".pkm";
+            ok = world->load(path.c_str());
+        }
+        if (!ok) {
+            cache_state_[index] = 2;
+            return nullptr;
+        }
+        if (!trigger_params::kCacheMaps) return world;
+        cache_state_[index] = 1;
+        cache_[index] = world;
+        return world;
+    }
+
+    void publish(std::shared_ptr<World> world, const char* reason) {
         std::lock_guard<std::mutex> lock(mutex_);
         last_scan_ms_ = diag::now_ms();
         if (!world) {
@@ -478,83 +541,148 @@ private:
         const Vector3 local{points[0][0], points[0][1], points[0][2]};
         if (local.x == 0.f && local.y == 0.f && local.z == 0.f) return;
 
-        struct candidate { int index; float volume; };
-        candidate list[kMapCount];
+        int order[kMapCount];
         int candidates = 0;
-        for (int i = 0; i < kMapCount; ++i) {
-            if (!in_bounds(kMaps[i], local, 3.f)) continue;
-            list[candidates].index = i;
-            list[candidates].volume = volume(kMaps[i]);
-            ++candidates;
-        }
+        for (int i = 0; i < kMapCount; ++i)
+            if (in_bounds(kMaps[i], local, trigger_params::kCandidateMargin)) order[candidates++] = i;
         if (candidates == 0) {
             publish(nullptr, "no map asset contains the local player");
             return;
         }
-        std::sort(list, list + candidates, [](const candidate& a, const candidate& b) {
-            return a.volume < b.volume;
+        std::sort(order, order + candidates, [](int a, int b) {
+            return volume(kMaps[a]) < volume(kMaps[b]);
         });
+        if (candidates > trigger_params::kMaxCandidates) candidates = trigger_params::kMaxCandidates;
 
-        std::unique_ptr<World> best;
-        int best_matched = 0, best_examined = 0;
+        std::shared_ptr<World> best;
+        ProbeStats best_stats{};
+        float best_residual = 1e30f;
         int attempts = 0;
-        for (int i = 0; i < candidates && attempts < 4; ++i) {
-            const MapEntry& entry = kMaps[list[i].index];
-            auto world = std::unique_ptr<World>(new World());
-            // Linked blob first, file system second (--maps stays an override
-            // for a map set that was not baked in).
-            bool ok = false;
-            const EmbeddedMap* blob = find_embedded(entry.name);
-            if (blob && blob->data && blob->size)
-                ok = world->load_memory(blob->data, blob->size, entry.name);
-            if (!ok) {
-                const std::string path = directory_ + "/" + entry.name + ".pkm";
-                ok = world->load(path.c_str());
-            }
-            if (!ok) continue;
+        int ignored = 0;
+        // Per-map evidence for this pass.
+        bool explains[kMapCount]{};
+        ProbeStats stats_of[kMapCount]{};
+        float residuals[kMapCount];
+        for (int i = 0; i < kMapCount; ++i) residuals[i] = 1e30f;
+
+        for (int i = 0; i < candidates; ++i) {
+            const int index = order[i];
+            if (drops_[index].load() >= unsigned(trigger_params::kMaxDropsPerMap)) { ++ignored; continue; }
+            std::shared_ptr<World> world = load_cached(index);
+            if (!world) continue;
             ++attempts;
-            int matched = 0;
-            const int examined = probe(*world, points, count, &matched);
-            if (matched > best_matched || (matched == best_matched && matched > 0 && !best)) {
-                best_matched = matched;
-                best_examined = examined;
-                best = std::move(world);
-            }
-            if (matched >= 2 && matched == examined) break;   // every ground point agrees
+            const ProbeStats stats = probe(*world, points, count);
+            // The local player stands on the map he is playing: without a floor
+            // under his own feet the candidate is out, full stop.
+            if (!stats.local_matched) continue;
+            stats_of[index] = stats;
+            residuals[index] = stats.residual;
+            explains[index] = stats.matched == stats.examined &&
+                              stats.examined >= trigger_params::kMinPointsToConfirm &&
+                              stats.residual <= trigger_params::kResidualMax;
+            const bool better = !best || stats.matched > best_stats.matched ||
+                                (stats.matched == best_stats.matched && stats.residual < best_residual);
+            if (!better) continue;
+            best = world;
+            best_stats = stats;
+            best_residual = stats.residual;
         }
-        if (!best || !accept_score(best_matched, best_examined)) {
-            // A pass can fail for a harmless reason (everyone on a rooftop
-            // during this window). Keep a map that still contains the player
-            // instead of silently disabling the wall check.
+
+        // Votes. A map that explains every ground point gains one vote per
+        // pass, any other map loses all of its votes. Several maps overlap and
+        // a flat foreign floor fits one frame exactly as well as the real one
+        // (offline replay of this session's own feet: Pyramid fitted 20/20 in
+        // one match, TrainingOutside 109/186 over the whole session), so a map
+        // is published only when it has been the single explanation for
+        // kConfirmVotes passes in a row. A single ground point (round start, no
+        // enemy in view) is weak evidence and needs twice as many.
+        int leader = -1;
+        unsigned leader_votes = 0;
+        int tied = 0;
+        for (int i = 0; i < kMapCount; ++i) {
+            votes_[i] = explains[i] ? (votes_[i] < 255 ? votes_[i] + 1 : 255) : 0;
+            if (!votes_[i]) continue;
+            if (votes_[i] > leader_votes) {
+                leader_votes = votes_[i]; leader = i; tied = 1;
+            } else if (votes_[i] == leader_votes) {
+                ++tied;
+                // Same amount of evidence: the tighter alignment wins.
+                if (leader >= 0 && residuals[i] < residuals[leader]) leader = i;
+            }
+        }
+        std::shared_ptr<World> confirmed;
+        ProbeStats confirmed_stats{};
+        if (leader >= 0) {
+            const ProbeStats& stats = stats_of[leader];
+            const unsigned need = stats.examined < trigger_params::kMinPointsToConfirm
+                                      ? unsigned(trigger_params::kConfirmVotes) * 2u
+                                      : unsigned(trigger_params::kConfirmVotes);
+            const long long now = diag::now_ms();
+            if (tied > 1) {
+                if (!ambiguous_since_) ambiguous_since_ = now;
+            } else {
+                ambiguous_since_ = 0;
+            }
+            // Ambiguity is normal on a shared flat floor at round start. It must
+            // not silence the trigger forever: after kAmbiguityTimeoutMs the
+            // tightest fit is used and the menu says so. If it was the wrong
+            // map the damage feedback drops it (three shots, no damage).
+            const bool give_up_waiting = ambiguous_since_ && now - ambiguous_since_ > trigger_params::kAmbiguityTimeoutMs;
+            if (leader_votes >= need && (tied <= 1 || give_up_waiting)) {
+                confirmed = cache_[leader];
+                confirmed_stats = stats;
+                if (tied > 1)
+                    diag::log("MAP", "%d maps explain the ground equally well, using the tightest fit %s (residual %.2f)",
+                              tied, kMaps[leader].name, stats.residual);
+            }
+        } else {
+            ambiguous_since_ = 0;
+        }
+
+        if (!confirmed) {
+            // Nothing is confirmed yet: keep a map that still contains the
+            // player (the wall check on it is no worse than nothing), and say
+            // so in the log and in the menu.
             bool keep = false;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 keep = world_ != nullptr && inside(published_, local, 8.f);
                 if (keep) last_scan_ms_ = diag::now_ms();
             }
+            char line[256];
+            std::snprintf(line, sizeof(line),
+                          "probe: %d candidates, %d probed%s, best %s (%.0f%% of points, residual %.2f) — not confirmed yet",
+                          candidates, attempts, ignored ? " (some maps ignored)" : "",
+                          best ? best->name().c_str() : "none",
+                          best ? 100.f * float(best_stats.matched) / float(best_stats.examined ? best_stats.examined : 1) : 0.f,
+                          best_residual);
             if (keep) {
-                diag::log("MAP", "probe found nothing better (%d/%d), keeping the loaded map",
-                          best_matched, best_examined);
-                return;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    status_ = "map: " + published_name_ + " (checking)";
+                }
+                diag::log("MAP", "%s, keeping %s", line, published_name_.c_str());
+            } else {
+                diag::log("MAP", "%s", line);
+                publish(nullptr, line);
             }
-            char line[160];
-            std::snprintf(line, sizeof(line), "no map matched (%d/%d ground probes, %d candidates, %d attempts)",
-                          best_matched, best_examined, candidates, attempts);
-            diag::log("MAP", "%s", line);
-            publish(nullptr, line);
             return;
         }
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (world_ && published_name_ == best->name()) {
+            if (world_ && published_name_ == confirmed->name()) {
+                status_ = "map: " + published_name_;
                 last_scan_ms_ = diag::now_ms();   // same map, nothing to publish
                 return;
             }
         }
-        char line[192];
-        std::snprintf(line, sizeof(line), "picked %s: %d/%d ground probes, %d candidates, %d attempts",
-                      best->name().c_str(), best_matched, best_examined, candidates, attempts);
-        publish(std::move(best), line);
+        char line[256];
+        std::snprintf(line, sizeof(line),
+                      "picked %s: %d/%d ground probes (feet %.2f m above the floor, residual %.2f), "
+                      "%d candidates, %d probes",
+                      confirmed->name().c_str(), confirmed_stats.matched, confirmed_stats.examined,
+                      confirmed_stats.local_delta, confirmed_stats.residual, candidates, attempts);
+        publish(confirmed, line);
     }
 
     void worker_loop() {
@@ -585,7 +713,17 @@ private:
     }
 
     mutable std::mutex mutex_;
-    std::unique_ptr<World> world_;
+    std::shared_ptr<World> world_;
+    // Worker-thread only: parsed worlds and their load state (0 = not tried,
+    // 1 = cached, 2 = failed to load).
+    std::shared_ptr<World> cache_[kMapCount];
+    unsigned char cache_state_[kMapCount]{};
+    // Written by the render thread (invalidate) and read by the worker.
+    std::atomic<unsigned> drops_[kMapCount]{};
+    // Worker-thread only: consecutive passes in which the map explained every
+    // ground point.
+    unsigned char votes_[kMapCount]{};
+    long long ambiguous_since_{0};
     Bounds published_{};
     std::string published_name_;
     std::string status_{"map: waiting"};

@@ -27,6 +27,7 @@
 #include "../game/hitbox_defs.hpp"
 #include "../game/map_world.hpp"
 #include "../game/player.hpp"
+#include "../game/trigger_params.hpp"
 #include "../ui/cfg.hpp"
 #include "../other/touch_inject.hpp"
 #include "../other/diag.hpp"
@@ -125,18 +126,17 @@ struct damage_state {
 };
 
 inline std::unordered_map<uint64_t, damage_state> s_damage;
-static constexpr long long kDamageWindowMs = 250;
-static constexpr long long kConfirmTtlMs = 2500;
+static constexpr long long kDamageWindowMs = trigger_params::kDamageWindowMs;
+static constexpr long long kConfirmTtlMs = trigger_params::kConfirmTtlMs;
 // A map that says "clear" while the bullets do nothing is a wrong map (or a
 // moved collider): drop it after three such shots and let the tracker re-check.
 inline bool s_map_ready = false;
 inline int s_map_misses = 0;
 
 inline long long blacklist_for_streak(int streak) {
-    if (streak <= 1) return 400;     // spread or a moving target, not necessarily a wall
-    if (streak == 2) return 2000;
-    if (streak == 3) return 6000;
-    return 15000;
+    if (streak <= 0) return 0;
+    const int index = std::clamp(streak, 1, 4) - 1;
+    return trigger_params::kBlacklist[index];
 }
 
 inline bool is_blacklisted(uint64_t id, long long now_ms) {
@@ -207,7 +207,48 @@ struct Selection {
     std::optional<TriggerTarget> candidate;
     bool blocker_ahead{false};     // the nearest volume belongs to a teammate
     const char* reject{nullptr};   // why there is no candidate
+    // Diagnostics for "the crosshair is not on a hit volume": how close the
+    // ray came to the nearest body, and whose body it was.
+    float near_gap{1e30f};
+    int near_bone{-1};
+    uint64_t near_id{};
 };
+
+// Closest distance between an infinite ray and a segment.
+inline float ray_segment_gap(Vector3 origin, Vector3 dir, Vector3 a, Vector3 b) {
+    const Vector3 u = b - a;
+    const Vector3 w = origin - a;
+    const float uu = hitbox::v3_dot(u, u);
+    const float du = hitbox::v3_dot(dir, u);    // |dir| == 1
+    const float wd = hitbox::v3_dot(w, dir);
+    const float uw = hitbox::v3_dot(w, u);
+    float t = 0.f, s = 0.f;
+    const float denom = uu - du * du;
+    if (denom > 1e-6f && uu > 1e-6f) {
+        s = std::clamp((uw - wd * du) / denom, 0.f, 1.f);
+        t = s * du - wd;
+    } else {
+        s = uu > 1e-6f ? std::clamp(uw / uu, 0.f, 1.f) : 0.f;
+        t = s * du - wd;
+    }
+    if (t < 0.f) {
+        t = 0.f;
+        s = uu > 1e-6f ? std::clamp(uw / uu, 0.f, 1.f) : 0.f;
+    }
+    const Vector3 p = origin + dir * t;
+    const Vector3 q = a + u * s;
+    return hitbox::v3_len(p - q);
+}
+
+inline float volume_gap(Vector3 origin, Vector3 dir, const hitbox::HitVolume& volume) {
+    if (volume.capsule)
+        return ray_segment_gap(origin, dir, volume.a, volume.b) - volume.radius;
+    const float gap = ray_segment_gap(origin, dir, volume.center, volume.center);
+    const float reach = hitbox::v3_len(volume.half_axes[0]) +
+                        hitbox::v3_len(volume.half_axes[1]) +
+                        hitbox::v3_len(volume.half_axes[2]);
+    return gap - reach * 0.5f;
+}
 
 inline Selection select(const target* enemies, int enemy_count,
                         const target* blockers, int blocker_count,
@@ -243,7 +284,16 @@ inline Selection select(const target* enemies, int enemy_count,
             const int nv = hitbox::make_hit_volumes(t.bones, volumes, kShrinkFactor);
             for (int v = 0; v < nv; ++v) {
                 const auto distance = hitbox::ray_hit_volume(eye, forward, volumes[v]);
-                if (!distance || *distance < kMinDistance) continue;
+                if (!distance || *distance < kMinDistance) {
+                    if (distance) continue;   // behind the muzzle, not a miss
+                    const float gap = volume_gap(eye, forward, volumes[v]);
+                    if (gap < out.near_gap) {
+                        out.near_gap = gap;
+                        out.near_bone = volumes[v].bone;
+                        out.near_id = t.id;
+                    }
+                    continue;
+                }
                 if (*distance < best) {
                     best = *distance;
                     best_bone = volumes[v].bone;
@@ -287,10 +337,22 @@ inline void reset() {
 inline void log_reject(const char* reason) {
     static long long last = 0;
     static const char* previous = nullptr;
-    if (reason == previous && !diag::every(last, 1000)) return;
+    if (reason == previous && !diag::every(last, trigger_params::kRejectLogMs)) return;
     previous = reason;
     last = diag::now_ms();
     diag::log("TRIGGER", "hold: %s", reason);
+}
+
+// The most common hold is "crosshair not on a hit volume". Saying *how far* the
+// ray passed from the nearest body separates the two causes: a few centimetres
+// is hitbox scale, half a metre or more is a camera/pose mismatch.
+inline void log_near_miss(const Selection& selection) {
+    if (selection.near_gap > 1.20f || selection.near_id == 0) return;
+    static long long last = 0;
+    if (!diag::every(last, trigger_params::kRejectLogMs)) return;
+    diag::log("TRIGGER", "ray misses id=0x%llx bone=%d by %.2f m",
+              (unsigned long long)selection.near_id, selection.near_bone,
+              selection.near_gap);
 }
 
 inline void tick(const target* enemies, int enemy_count,
@@ -351,6 +413,7 @@ inline void tick(const target* enemies, int enemy_count,
 
     const Selection selection = select(enemies, enemy_count, blockers, blocker_count, view, now_ms);
     if (!selection.candidate) {
+        log_near_miss(selection);
         log_reject(selection.reject ? selection.reject : "no target");
         s_delay.reset();
         return;

@@ -506,34 +506,23 @@ void visuals::draw() {
     const matrix TriggerView = ViewMatrix;
 
 
-    // Matrix fallback: when all positioned enemies fail projection with the
-    // current matrices (stale camera read at round transition), retry with
-    // the last matrices that successfully projected at least one enemy.
-    {
-        static matrix s_good_view{}, s_good_proj{};
-        static bool s_has_good = false;
-        static int s_fallback_streak = 0;
-
-        if (!frame_enemies.empty()) {
-            bool any_projects = false;
-            for (const auto& Enemy : frame_enemies) {
-                ImVec2 tmp;
-                if (world_to_screen(Enemy.head, ViewMatrix, ProjectionMatrix, tmp)) { any_projects = true; break; }
-            }
-            if (any_projects) {
-                s_good_view = ViewMatrix;
-                s_good_proj = ProjectionMatrix;
-                s_has_good = true;
-                s_fallback_streak = 0;
-            } else if (s_has_good && s_fallback_streak < 3) {
-                ++s_fallback_streak;
-                ViewMatrix = s_good_view;
-                ProjectionMatrix = s_good_proj;
-                static long long fb_log = 0;
-                if (diag::every(fb_log, 1000))
-                    diag::log("CAMERA", "matrix fallback frame %d: positioned=%d but none projected, using cached matrices",
-                              s_fallback_streak, positioned);
-            }
+    // Matrix fallback: a stale camera read at a round transition can make every
+    // projection fail for a frame. The old code then drew with the *previous*
+    // matrices, which puts every box where the player no longer is — the
+    // session log shows 50 such frames. Not drawing for one frame is
+    // invisible; drawing boxes in the wrong place is not. So the matrices are
+    // left alone and the boxes simply fail to project.
+    if (!frame_enemies.empty()) {
+        bool any_projects = false;
+        for (const auto& Enemy : frame_enemies) {
+            ImVec2 tmp;
+            if (world_to_screen(Enemy.head, ViewMatrix, ProjectionMatrix, tmp)) { any_projects = true; break; }
+        }
+        if (!any_projects) {
+            static long long fb_log = 0;
+            if (diag::every(fb_log, 1000))
+                diag::log("CAMERA", "positioned=%d but none projected, boxes skipped this frame",
+                          positioned);
         }
     }
 

@@ -383,6 +383,15 @@ namespace ui::menu {
             toggle_row(dl, "Team Block", &cfg::trigger::block_teammates, c, cw, row, a, k, live);
             c.y += row;
 
+            // 5..60 m. 60 means "no limit" (0 internally). 0 used to mean no
+            // limit and the trigger happily fired at 40 m through the level.
+            {
+                float limit = cfg::trigger::max_distance > 0.f ? cfg::trigger::max_distance : 60.f;
+                slider_row(dl, "Range", &limit, 5.f, 60.f, c, cw, row, a, k, live);
+                cfg::trigger::max_distance = limit >= 59.5f ? 0.f : limit;
+            }
+            c.y += row;
+
             // Which collider the trigger is wall-checking against. Refreshed
             // twice a second: status() copies a string under the map lock.
             static std::string s_map_line = "Map: starting";

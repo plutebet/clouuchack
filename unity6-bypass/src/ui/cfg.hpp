@@ -24,7 +24,7 @@ namespace trigger {
     inline int delay_ms = 0;
     // How long the injected finger stays down per shot. The PC donor holds a
     // mouse button for 16 ms; a phone fire button needs a little more.
-    inline int hold_ms = 30;
+    inline int hold_ms = 35;
     inline float fire_x = 0.f;
     inline float fire_y = 0.f;
     inline bool fire_set = false;
@@ -38,7 +38,9 @@ namespace trigger {
     // A teammate between the eye and the enemy cancels the shot.
     inline bool block_teammates = true;
     inline float min_distance = 0.f;
-    inline float max_distance = 0.f;
+    // 0 = no limit. Without a limit the trigger fired at 40 m through the whole
+    // level (session 20261121: 375 shots, 312 of them dealt no damage).
+    inline float max_distance = 30.f;
 }
 
 namespace aim {
