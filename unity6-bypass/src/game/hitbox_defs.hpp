@@ -43,9 +43,81 @@ struct HitVolume {
     int bone;
     bool capsule;
     Vector3 center;
-    Vector3 a, b;     // capsule endpoints (world space)
-    float radius;
+    Vector3 a, b;         // capsule endpoints (world space)
+    Vector3 half_axes[3]; // OBB half-extent axes (world space, from PC pinkie)
+    float radius;         // capsule radius
 };
+
+// ---- Vector helpers ----
+inline float v3_dot(Vector3 a, Vector3 b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
+inline float v3_len(Vector3 v) { return std::sqrt(v.x*v.x + v.y*v.y + v.z*v.z); }
+inline Vector3 v3_norm(Vector3 v) { float l = v3_len(v); return l > 0.001f ? Vector3{v.x/l, v.y/l, v.z/l} : Vector3{0,1,0}; }
+inline Vector3 v3_cross(Vector3 a, Vector3 b) { return {a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x}; }
+inline Vector3 v3_scale(Vector3 v, float s) { return {v.x*s, v.y*s, v.z*s}; }
+
+// Build an approximate 3-axis frame for OBB bones from skeleton positions.
+// PC uses full 4x3 bone matrices; we estimate from bone connectivity.
+struct BoneFrame { Vector3 x, y, z; };
+
+inline BoneFrame obb_bone_frame(int bone, const player::BoneData& bones) {
+    using namespace player;
+    Vector3 up{0,1,0}, right{1,0,0}, fwd{0,0,1};
+
+    switch (bone) {
+    case BoneHips:
+        if (bones.has(BoneSpine)) up = v3_norm(bones.positions[BoneSpine] - bones.positions[BoneHips]);
+        if (bones.has(BoneLeftUpperLeg) && bones.has(BoneRightUpperLeg))
+            right = v3_norm(bones.positions[BoneLeftUpperLeg] - bones.positions[BoneRightUpperLeg]);
+        else right = v3_norm(v3_cross(up, fwd));
+        fwd = v3_norm(v3_cross(up, right));
+        right = v3_norm(v3_cross(fwd, up));
+        break;
+    case BoneSpine:
+        if (bones.has(BoneChest) && bones.has(BoneHips))
+            up = v3_norm(bones.positions[BoneChest] - bones.positions[BoneHips]);
+        if (bones.has(BoneLeftShoulder) && bones.has(BoneRightShoulder))
+            right = v3_norm(bones.positions[BoneLeftShoulder] - bones.positions[BoneRightShoulder]);
+        else right = v3_norm(v3_cross(up, fwd));
+        fwd = v3_norm(v3_cross(up, right));
+        right = v3_norm(v3_cross(fwd, up));
+        break;
+    case BoneChest:
+        if (bones.has(BoneNeck) && bones.has(BoneSpine))
+            up = v3_norm(bones.positions[BoneNeck] - bones.positions[BoneSpine]);
+        if (bones.has(BoneLeftShoulder) && bones.has(BoneRightShoulder))
+            right = v3_norm(bones.positions[BoneLeftShoulder] - bones.positions[BoneRightShoulder]);
+        else right = v3_norm(v3_cross(up, fwd));
+        fwd = v3_norm(v3_cross(up, right));
+        right = v3_norm(v3_cross(fwd, up));
+        break;
+    case BoneLeftFoot:
+        if (bones.has(BoneLeftLowerLeg))
+            fwd = v3_norm(bones.positions[BoneLeftFoot] - bones.positions[BoneLeftLowerLeg]);
+        right = v3_norm(v3_cross(up, fwd));
+        up = v3_norm(v3_cross(fwd, right));
+        break;
+    case BoneRightFoot:
+        if (bones.has(BoneRightLowerLeg))
+            fwd = v3_norm(bones.positions[BoneRightFoot] - bones.positions[BoneRightLowerLeg]);
+        right = v3_norm(v3_cross(up, fwd));
+        up = v3_norm(v3_cross(fwd, right));
+        break;
+    case BoneLeftHand:
+        if (bones.has(BoneLeftLowerArm))
+            right = v3_norm(bones.positions[BoneLeftHand] - bones.positions[BoneLeftLowerArm]);
+        fwd = v3_norm(v3_cross(up, right));
+        up = v3_norm(v3_cross(right, fwd));
+        break;
+    case BoneRightHand:
+        if (bones.has(BoneRightLowerArm))
+            right = v3_norm(bones.positions[BoneRightHand] - bones.positions[BoneRightLowerArm]);
+        fwd = v3_norm(v3_cross(up, right));
+        up = v3_norm(v3_cross(right, fwd));
+        break;
+    default: break;
+    }
+    return {right, up, fwd};
+}
 
 // Skeleton connectivity: for capsule bones, estimate axis from parent→child.
 inline Vector3 bone_axis(int bone, const player::BoneData& bones) {
@@ -95,11 +167,16 @@ inline int make_hit_volumes(const player::BoneData& bones, HitVolume* out, float
             Vector3 axis = bone_axis(i, bones);
             vol.a = {vol.center.x - axis.x * half_h, vol.center.y - axis.y * half_h, vol.center.z - axis.z * half_h};
             vol.b = {vol.center.x + axis.x * half_h, vol.center.y + axis.y * half_h, vol.center.z + axis.z * half_h};
+            vol.half_axes[0] = vol.half_axes[1] = vol.half_axes[2] = {0,0,0};
         } else {
+            // OBB: build proper half-extent axes from skeleton frame (from PC pinkie)
             vol.capsule = false;
-            float r = std::max({def.sx, def.sy, def.sz}) * 0.5f * scale;
-            vol.radius = std::max(r, 0.04f);
+            BoneFrame frame = obb_bone_frame(i, bones);
+            vol.half_axes[0] = v3_scale(frame.x, def.sx * 0.5f * scale);
+            vol.half_axes[1] = v3_scale(frame.y, def.sy * 0.5f * scale);
+            vol.half_axes[2] = v3_scale(frame.z, def.sz * 0.5f * scale);
             vol.a = vol.b = vol.center;
+            vol.radius = 0;
         }
         ++count;
     }
@@ -124,7 +201,6 @@ inline std::optional<float> ray_capsule(Vector3 o, Vector3 d, Vector3 ca, Vector
     Vector3 oa = {o.x - ca.x, o.y - ca.y, o.z - ca.z};
     float baba = ba.x * ba.x + ba.y * ba.y + ba.z * ba.z;
 
-    // Inside-capsule check
     float u = std::clamp((oa.x * ba.x + oa.y * ba.y + oa.z * ba.z) / std::max(baba, 1e-8f), 0.f, 1.f);
     Vector3 nearest = {ca.x + ba.x * u, ca.y + ba.y * u, ca.z + ba.z * u};
     Vector3 diff = {o.x - nearest.x, o.y - nearest.y, o.z - nearest.z};
@@ -152,9 +228,33 @@ inline std::optional<float> ray_capsule(Vector3 o, Vector3 d, Vector3 ca, Vector
     return best;
 }
 
+// OBB slab intersection (from PC pinkie trigger_logic.cpp hit_volume_distance)
+inline std::optional<float> ray_obb(Vector3 o, Vector3 d, Vector3 center, const Vector3 half_axes[3]) {
+    float first = 0, last = 1000;
+    for (int i = 0; i < 3; ++i) {
+        Vector3 ax = half_axes[i];
+        float half = v3_len(ax);
+        if (half < 1e-5f) continue;
+        Vector3 axis = v3_scale(ax, 1.0f / half);
+        Vector3 oc = {o.x - center.x, o.y - center.y, o.z - center.z};
+        float p = v3_dot(oc, axis);
+        float q = v3_dot(d, axis);
+        if (std::abs(q) < 1e-8f) {
+            if (std::abs(p) > half) return std::nullopt;
+            continue;
+        }
+        float a = (-half - p) / q, b = (half - p) / q;
+        if (a > b) std::swap(a, b);
+        first = std::max(first, a);
+        last = std::min(last, b);
+        if (first > last) return std::nullopt;
+    }
+    return first >= 0 ? std::optional<float>(first) : std::nullopt;
+}
+
 inline std::optional<float> ray_hit_volume(Vector3 o, Vector3 d, const HitVolume& v) {
     if (v.capsule) return ray_capsule(o, d, v.a, v.b, v.radius);
-    return ray_sphere(o, d, v.center, v.radius);
+    return ray_obb(o, d, v.center, v.half_axes);
 }
 
 // ---- Camera extraction from view matrix (column-major OpenGL) ----

@@ -637,26 +637,33 @@ void visuals::draw() {
             t.feet = e.position;
             t.hp = e.hp;
             t.max_hp = e.max_hp;
-            t.visible = false; // default: invisible (safe — require positive confirmation)
+            t.visible = false;
             t.bones = e.bones;
 
-            // --- Dual-layer visibility check ---
-            // Both layers must agree for the target to be visible.
-            // Layer 1: szi.mow (frustum check, necessary but not sufficient).
-            // Layer 2: PlayerAnimationData.IsVisible (occlusion-aware, the
-            //          animation system stops updating invisible characters).
-            bool in_frustum = false;
+            // Bone data freshness from cache
+            {
+                auto bit = player::g_bone_cache.find(e.object);
+                if (bit != player::g_bone_cache.end())
+                    t.bones_updated_ms = bit->second.cur_ms;
+            }
+
+            // Read all 6 szi visibility fields
             if (e.snap) {
                 const uint64_t szi = untag(e.snap->szi);
                 if (obj_ptr(szi)) {
-                    uint8_t mow = 0;
-                    if (mem_read(szi + v100::szi_mow, &mow, 1) && mow > 0)
-                        in_frustum = true;
+                    uint8_t szi_buf[6]{};
+                    if (mem_read(szi + 0x10, szi_buf, 6)) {
+                        t.szi.fhzz = szi_buf[0];
+                        t.szi.mow  = szi_buf[1];
+                        t.szi.lixl = szi_buf[2];
+                        t.szi.ojje = szi_buf[3];
+                        t.szi.rjux = szi_buf[4];
+                        t.szi.ukgq = szi_buf[5];
+                    }
                 }
             }
 
-            bool anim_confirmed = false;
-            bool anim_checked = false;
+            // PlayerAnimationData.IsVisible
             auto it = s_chc_cache.find(e.object);
             uint64_t chc = 0;
             if (it != s_chc_cache.end() && exact_class(it->second, chc_class))
@@ -669,15 +676,10 @@ void visuals::draw() {
                 const uint64_t anim = untag(rpm<uint64_t>(chc + v100::presentation_animation_data));
                 if (obj_ptr(anim)) {
                     uint8_t anim_visible = 0;
-                    if (mem_read(anim + v100::animation_is_visible, &anim_visible, 1)) {
-                        anim_checked = true;
-                        anim_confirmed = (anim_visible > 0);
-                    }
+                    if (mem_read(anim + v100::animation_is_visible, &anim_visible, 1))
+                        t.visible = (anim_visible > 0);
                 }
             }
-            // Strict: both frustum AND occlusion must confirm visibility.
-            // If anim data can't be read, target stays invisible (safe).
-            t.visible = in_frustum && anim_checked && anim_confirmed;
 
             trig_tgts.push_back(t);
         }

@@ -21,9 +21,7 @@ namespace esp {
 
 namespace trigger {
     inline bool enabled = false;
-    inline float fov = 1.0f;
     inline int delay_ms = 0;
-    // interval/confirm/region removed — TriggerFire/TriggerDelay state machines handle timing
     inline float fire_x = 0.f;
     inline float fire_y = 0.f;
     inline bool fire_set = false;

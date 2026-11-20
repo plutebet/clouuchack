@@ -367,13 +367,8 @@ namespace ui::menu {
             fire_button_row(dl, c, cw, row, a, k, live);
             c.y += row;
 
-            slider_row(dl, "FOV", &cfg::trigger::fov, 0.2f, 3.0f, c, cw, row, a, k, live);
-            c.y += row;
-
             int_slider_row(dl, "Delay", &cfg::trigger::delay_ms, 0, 300, c, cw, row, a, k, live);
             c.y += row;
-
-            // Interval/confirm removed — TriggerFire state machine handles timing
 
             toggle_row(dl, "Vis Check", &cfg::trigger::vis_check, c, cw, row, a, k, live);
         }
