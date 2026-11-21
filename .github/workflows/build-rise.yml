@@ -1,0 +1,43 @@
+name: Build Rise
+
+on:
+  push:
+    branches: [ "claude/reverse-engineering-partner-hzm1fd" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup NDK
+      uses: nttld/setup-ndk@v1
+      id: ndk
+      with:
+        ndk-version: r26d
+
+    - name: Build rise with ndk-build
+      run: |
+        cd unity6-bypass
+        ${{ steps.ndk.outputs.ndk-path }}/ndk-build -j$(nproc) NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=jni/Android_rise.mk NDK_APPLICATION_MK=jni/Application.mk
+
+    - name: Upload binary as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: rise-arm64
+        path: unity6-bypass/libs/arm64-v8a/rise
+
+    - name: Commit binary to repo
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        mkdir -p build-output
+        cp unity6-bypass/libs/arm64-v8a/rise build-output/rise
+        git add build-output/rise
+        git commit -m "build: add compiled rise ARM64 binary [skip ci]"
+        git pull --rebase || true
+        git push

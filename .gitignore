@@ -1,0 +1,4 @@
+unity6-bypass/obj/
+unity6-bypass/libs/
+*.o
+*.d

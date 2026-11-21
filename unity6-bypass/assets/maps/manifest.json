@@ -1,0 +1,889 @@
+{
+  "format": "PKM2: 48-byte triangles, surface type/collider ID/layer",
+  "surface_types": {
+    "0": null,
+    "1": "Glass",
+    "2": "Cardboard",
+    "3": "MetalGrate",
+    "4": "Wood",
+    "5": "Plaster",
+    "6": "Tile",
+    "7": "Metal",
+    "8": "Concrete",
+    "9": "Brick",
+    "10": "SolidMetal",
+    "11": "ThinMetal",
+    "12": "ThinWood",
+    "13": "Character",
+    "14": "Ground",
+    "15": "SurfaceMarkTrigger",
+    "16": "SnowConcrete",
+    "17": "SnowMetal",
+    "18": "SnowGround",
+    "19": "SolidMetalNoHole",
+    "20": "Gravel",
+    "21": "Grass",
+    "22": "Paper",
+    "23": "Water",
+    "24": "GlassWaterfall",
+    "25": "WoodSolid",
+    "26": "GrassNoDecal"
+  },
+  "tag_table": [
+    "PlayerHitTrigger",
+    "SurfaceType/Brick",
+    "SurfaceType/Wood",
+    "SurfaceType/Character",
+    "SurfaceType/Glass",
+    "SurfaceType/ThinWood",
+    "SurfaceType/Metal",
+    "SurfaceType/Concrete",
+    "SurfaceType/ThinMetal",
+    "SurfaceType/Plaster",
+    "SurfaceType/Ground",
+    "SurfaceType/SolidMetal",
+    "AmbientType/Birds",
+    "AmbientType/Pigeon",
+    "AmbientType/GarbageFlies",
+    "AmbientType/RoomRadio",
+    "AmbientType/Clock",
+    "AmbientType/Building",
+    "AmbientType/LevelSandstone",
+    "AmbientType/LevelDefault",
+    "SurfaceType/SurfaceMarkTrigger",
+    "FxTemporaire",
+    "SurfaceType/MetalGrate",
+    "SpectatorCamera",
+    "CameraDefaultPosition",
+    "ThinWood",
+    "Wood",
+    "Concrete",
+    "ActivateTrigger",
+    "AmbientType/Halloween",
+    "CaptureZone",
+    "SurfaceType/SnowConcrete",
+    "SurfaceType/SnowGround",
+    "SurfaceType/SnowMetal",
+    "HackZone",
+    "PlantZone",
+    "PlantPlace",
+    "DropZone",
+    "StealZone",
+    "SurfaceType/SolidMetalNoHole",
+    "AmbientType/Polygon",
+    "EnvironmentalSound",
+    "AmbientSound",
+    "SurfaceType/Gravel",
+    "SurfaceType/Grass",
+    "SurfaceType/Paper",
+    "SurfaceType/Water",
+    "SurfaceType/GlassWaterfall",
+    "SurfaceType/WoodSolid",
+    "Graffiti",
+    "LevelZoneTrigger",
+    "Fire",
+    "SurfaceType/GrassNoDecal",
+    "SurfaceType/Smoke",
+    "SurfaceType/Cardboard",
+    "SurfaceType/Tile",
+    "SurfaceType/Unknown",
+    "DynamicOcclusionRoot"
+  ],
+  "apk_sha256": "63b44f69ee8db6b04ad7bd3d42a357bd84d05f7ace12886aee54d2be889155db",
+  "obb_md5": "bcdb821d6b89443676fc733dbb32b41d",
+  "source_version": "Standoff 2 1.1.0 / versionCode 103982",
+  "excluded_layers": {
+    "15": "DynamicOcclusion: render occluders are not physical bullet walls"
+  },
+  "maps": [
+    {
+      "map": "Arena",
+      "bundles": [
+        "assets/CustomDLC/Arena/arena_content_main.bundle",
+        "assets/CustomDLC/Arena/arena_content_schema.bundle",
+        "assets/CustomDLC/Arena/arena_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 230,
+        "BoxCollider": 241
+      },
+      "triangles": 17392,
+      "layers": {
+        "14": 14209,
+        "0": 3183
+      },
+      "surface_types": {
+        "1": 370,
+        "21": 87,
+        "7": 3732,
+        "10": 2766,
+        "9": 978,
+        "12": 2112,
+        "22": 469,
+        "8": 1275,
+        "4": 1560,
+        "25": 830,
+        "3": 30,
+        "4294967295": 3183
+      },
+      "sha256": "08ccf15cc86d6f97d9d5757af45cc5db92fb00a0485a243a0e231cd959e5725e",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Block",
+      "bundles": [
+        "assets/CustomDLC/Block/block_content_main.bundle",
+        "assets/CustomDLC/Block/block_content_schema.bundle",
+        "assets/CustomDLC/Block/block_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 115,
+        "BoxCollider": 170
+      },
+      "triangles": 20035,
+      "layers": {
+        "14": 16779,
+        "0": 3256
+      },
+      "surface_types": {
+        "7": 4651,
+        "25": 3383,
+        "1": 572,
+        "22": 68,
+        "10": 2885,
+        "18": 1935,
+        "8": 2718,
+        "3": 375,
+        "14": 84,
+        "4": 108,
+        "4294967295": 3256
+      },
+      "sha256": "6e5a7f6457aa8a67932b8c667d7d99187e9cc71970f6fd9983c41bc8eb45c474",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Breeze",
+      "bundles": [
+        "assets/CustomDLC/Breeze/breeze_content_main.bundle",
+        "assets/CustomDLC/Breeze/breeze_content_schema.bundle",
+        "assets/CustomDLC/Breeze/breeze_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 1652,
+        "BoxCollider": 1169
+      },
+      "triangles": 85111,
+      "layers": {
+        "14": 71425,
+        "0": 13676,
+        "4": 10
+      },
+      "surface_types": {
+        "10": 3491,
+        "25": 1016,
+        "3": 537,
+        "4294967295": 13676,
+        "7": 4113,
+        "22": 930,
+        "1": 1126,
+        "8": 24138,
+        "4": 22446,
+        "23": 10,
+        "12": 1641,
+        "14": 32,
+        "21": 1357,
+        "9": 10598
+      },
+      "sha256": "74b94af83363dcb7b09cb1a1ad6a1726e41c57ad9b30ecdfc3194ca7fc8938f2",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Bridge",
+      "bundles": [
+        "assets/CustomDLC/Bridge/bridge_content_main.bundle",
+        "assets/CustomDLC/Bridge/bridge_content_schema.bundle",
+        "assets/CustomDLC/Bridge/bridge_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 160,
+        "BoxCollider": 170
+      },
+      "triangles": 24383,
+      "layers": {
+        "14": 22048,
+        "0": 2335
+      },
+      "surface_types": {
+        "3": 142,
+        "9": 11519,
+        "4": 2075,
+        "10": 819,
+        "7": 1550,
+        "22": 518,
+        "8": 3102,
+        "1": 188,
+        "14": 341,
+        "25": 1794,
+        "4294967295": 2335
+      },
+      "sha256": "61bdb0896a27543f12e46bb1b5378d65d05cff409c0cc7e2bf45f9e76829947b",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Cableway",
+      "bundles": [
+        "assets/CustomDLC/Cableway/cableway_content_main.bundle",
+        "assets/CustomDLC/Cableway/cableway_content_schema.bundle",
+        "assets/CustomDLC/Cableway/cableway_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 302,
+        "BoxCollider": 91
+      },
+      "triangles": 33237,
+      "layers": {
+        "14": 32169,
+        "0": 1068
+      },
+      "surface_types": {
+        "1": 792,
+        "8": 4641,
+        "4": 12396,
+        "10": 8107,
+        "25": 368,
+        "7": 4588,
+        "14": 467,
+        "3": 332,
+        "22": 478,
+        "4294967295": 1068
+      },
+      "sha256": "442566df71f8eba8c4498efeb08a499215d7a20be25d94983111fb9c070d161f",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Dune",
+      "bundles": [
+        "assets/CustomDLC/Dune/dune_content_main.bundle",
+        "assets/CustomDLC/Dune/dune_content_schema.bundle",
+        "assets/CustomDLC/Dune/dune_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 961,
+        "BoxCollider": 748
+      },
+      "triangles": 83711,
+      "layers": {
+        "14": 74697,
+        "0": 8988,
+        "4": 26
+      },
+      "surface_types": {
+        "7": 10054,
+        "9": 12081,
+        "25": 10435,
+        "22": 4456,
+        "14": 2010,
+        "4": 11462,
+        "1": 806,
+        "8": 20072,
+        "11": 244,
+        "10": 2120,
+        "3": 823,
+        "4294967295": 8988,
+        "23": 26,
+        "12": 134
+      },
+      "sha256": "7778ec5927c48d787a19714ed3e25537a451f12c13df19cc1ae52cc3ddfdf0b9",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Favelas",
+      "bundles": [
+        "assets/CustomDLC/Favelas/favelas_content_main.bundle",
+        "assets/CustomDLC/Favelas/favelas_content_schema.bundle",
+        "assets/CustomDLC/Favelas/favelas_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 249,
+        "BoxCollider": 371
+      },
+      "triangles": 42155,
+      "layers": {
+        "14": 37776,
+        "0": 4379
+      },
+      "surface_types": {
+        "7": 2380,
+        "1": 770,
+        "25": 9229,
+        "10": 9166,
+        "8": 7368,
+        "4": 5473,
+        "9": 1373,
+        "3": 52,
+        "22": 1098,
+        "14": 857,
+        "4294967295": 4379,
+        "12": 10
+      },
+      "sha256": "0472fc4d34f986f2c9f7d55839af8fcc1b0565cad5c0698c2716c39bb87b4fa3",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Hanami",
+      "bundles": [
+        "assets/CustomDLC/Hanami/hanami_content_main.bundle",
+        "assets/CustomDLC/Hanami/hanami_content_schema.bundle",
+        "assets/CustomDLC/Hanami/hanami_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 822,
+        "BoxCollider": 858
+      },
+      "triangles": 79830,
+      "layers": {
+        "14": 68938,
+        "4": 16,
+        "0": 10876
+      },
+      "surface_types": {
+        "8": 10355,
+        "14": 745,
+        "22": 3374,
+        "7": 3393,
+        "4": 17182,
+        "1": 782,
+        "25": 19158,
+        "3": 284,
+        "23": 16,
+        "10": 4328,
+        "9": 6553,
+        "21": 1761,
+        "12": 547,
+        "11": 370,
+        "20": 106,
+        "4294967295": 10876
+      },
+      "sha256": "33ee2a08fba9102936738d947f408d4cabb832e05c9b48057ca7c1d23cd7fb0e",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Hanari",
+      "bundles": [
+        "assets/CustomDLC/Hanari/hanari_content_main.bundle",
+        "assets/CustomDLC/Hanari/hanari_content_schema.bundle",
+        "assets/CustomDLC/Hanari/hanari_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 598,
+        "BoxCollider": 432
+      },
+      "triangles": 52774,
+      "layers": {
+        "14": 46871,
+        "0": 5899,
+        "4": 4
+      },
+      "surface_types": {
+        "10": 2116,
+        "8": 6985,
+        "21": 1270,
+        "22": 2692,
+        "4": 12897,
+        "25": 12468,
+        "9": 5657,
+        "4294967295": 5899,
+        "7": 1890,
+        "1": 350,
+        "11": 28,
+        "14": 268,
+        "3": 126,
+        "23": 4,
+        "12": 18,
+        "20": 106
+      },
+      "sha256": "774a445ae1ba8ecb5d6fa7d9abe7e6ec77eb255304a913cc9a0b05d7d8db5267",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Perimeter",
+      "bundles": [
+        "assets/CustomDLC/Perimeter/perimeter_content_main.bundle",
+        "assets/CustomDLC/Perimeter/perimeter_content_schema.bundle",
+        "assets/CustomDLC/Perimeter/perimeter_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 178,
+        "BoxCollider": 158
+      },
+      "triangles": 23902,
+      "layers": {
+        "14": 21813,
+        "0": 2089
+      },
+      "surface_types": {
+        "7": 4043,
+        "10": 4729,
+        "25": 3231,
+        "8": 4080,
+        "18": 2109,
+        "1": 1235,
+        "4": 689,
+        "4294967295": 2089,
+        "22": 559,
+        "3": 962,
+        "9": 176
+      },
+      "sha256": "b85f942b74b6bdf4f2a997774f8da00df2c2d84564bff7c5b97fe180e133e2c7",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Pipeline",
+      "bundles": [
+        "assets/CustomDLC/Pipeline/pipeline_content_main.bundle",
+        "assets/CustomDLC/Pipeline/pipeline_content_schema.bundle",
+        "assets/CustomDLC/Pipeline/pipeline_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 128,
+        "BoxCollider": 91
+      },
+      "triangles": 15327,
+      "layers": {
+        "14": 14235,
+        "0": 1092
+      },
+      "surface_types": {
+        "1": 74,
+        "8": 3680,
+        "7": 1166,
+        "25": 1180,
+        "10": 6870,
+        "4": 250,
+        "9": 826,
+        "3": 16,
+        "21": 14,
+        "22": 159,
+        "4294967295": 1092
+      },
+      "sha256": "ecd63e17767b9057dec720b86ae89f34171da6fd07f140190622382ef9a07c25",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Polygon",
+      "bundles": [
+        "assets/CustomDLC/Polygon/polygon_content_main.bundle",
+        "assets/CustomDLC/Polygon/polygon_content_schema.bundle",
+        "assets/CustomDLC/Polygon/polygon_scenes_0.bundle"
+      ],
+      "colliders": {
+        "BoxCollider": 59,
+        "MeshCollider": 83
+      },
+      "triangles": 6125,
+      "layers": {
+        "14": 5561,
+        "0": 564
+      },
+      "surface_types": {
+        "19": 108,
+        "1": 78,
+        "8": 429,
+        "3": 370,
+        "7": 4112,
+        "12": 174,
+        "4": 290,
+        "4294967295": 552,
+        "15": 12
+      },
+      "sha256": "6ffdc9ca1e4fd47967e13e639dd33496fe50f65ecd55f594ccde40d76fdc0809",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Pool",
+      "bundles": [
+        "assets/CustomDLC/Pool/pool_content_main.bundle",
+        "assets/CustomDLC/Pool/pool_content_schema.bundle",
+        "assets/CustomDLC/Pool/pool_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 242,
+        "BoxCollider": 97
+      },
+      "triangles": 17512,
+      "layers": {
+        "14": 16206,
+        "4": 142,
+        "0": 1164
+      },
+      "surface_types": {
+        "12": 3725,
+        "22": 595,
+        "8": 8032,
+        "7": 160,
+        "4": 2160,
+        "25": 1329,
+        "1": 56,
+        "23": 142,
+        "21": 149,
+        "4294967295": 1164
+      },
+      "sha256": "6b7b8b37f9bdbc9324b1db227dfc3756f64affa5b2046819f8bc3dd230af0465",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Prison",
+      "bundles": [
+        "assets/CustomDLC/Prison/prison_content_main.bundle",
+        "assets/CustomDLC/Prison/prison_content_schema.bundle",
+        "assets/CustomDLC/Prison/prison_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 773,
+        "BoxCollider": 578
+      },
+      "triangles": 67326,
+      "layers": {
+        "14": 59687,
+        "0": 7639
+      },
+      "surface_types": {
+        "18": 4967,
+        "7": 13580,
+        "8": 11694,
+        "1": 2145,
+        "25": 10482,
+        "10": 9802,
+        "4294967295": 7639,
+        "14": 1805,
+        "4": 2324,
+        "3": 1436,
+        "22": 369,
+        "17": 13,
+        "12": 170,
+        "11": 164,
+        "9": 736
+      },
+      "sha256": "47611b039d6286286e9a39e1bc77f8bfeabc4eb270bb0818b68c0ffbac21bc25",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Province",
+      "bundles": [
+        "assets/CustomDLC/Province/province_content_main.bundle",
+        "assets/CustomDLC/Province/province_content_schema.bundle",
+        "assets/CustomDLC/Province/province_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 864,
+        "BoxCollider": 1298
+      },
+      "triangles": 83371,
+      "layers": {
+        "14": 68071,
+        "0": 12600,
+        "24": 2700
+      },
+      "surface_types": {
+        "21": 182,
+        "4": 18653,
+        "25": 9329,
+        "9": 17161,
+        "8": 11187,
+        "7": 8572,
+        "10": 457,
+        "1": 662,
+        "22": 650,
+        "14": 538,
+        "3": 674,
+        "23": 6,
+        "4294967295": 15300
+      },
+      "sha256": "51ae6ec98025a494e450d6cebe4ba47fa38e2d6b6e8f267d7c463aace3b4bbfd",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Pyramid",
+      "bundles": [
+        "assets/CustomDLC/Pyramid/pyramid_content_main.bundle",
+        "assets/CustomDLC/Pyramid/pyramid_content_schema.bundle",
+        "assets/CustomDLC/Pyramid/pyramid_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 338,
+        "BoxCollider": 170
+      },
+      "triangles": 43665,
+      "layers": {
+        "14": 40899,
+        "4": 2,
+        "0": 2764
+      },
+      "surface_types": {
+        "8": 18786,
+        "25": 3611,
+        "10": 432,
+        "7": 10730,
+        "22": 2637,
+        "14": 3519,
+        "23": 2,
+        "4294967295": 2764,
+        "1": 48,
+        "4": 1136
+      },
+      "sha256": "9c31dc509a5ee33af7fad28713d98d5da3b0720fafca9f79c2a085c47b15fa60",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Rust",
+      "bundles": [
+        "assets/CustomDLC/Rust/rust_content_main.bundle",
+        "assets/CustomDLC/Rust/rust_content_schema.bundle",
+        "assets/CustomDLC/Rust/rust_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 703,
+        "BoxCollider": 787
+      },
+      "triangles": 62600,
+      "layers": {
+        "14": 53114,
+        "4": 2,
+        "0": 9484
+      },
+      "surface_types": {
+        "7": 12174,
+        "8": 5690,
+        "9": 7302,
+        "10": 19729,
+        "25": 3836,
+        "1": 1097,
+        "23": 2,
+        "14": 280,
+        "22": 871,
+        "3": 151,
+        "4": 1608,
+        "11": 192,
+        "4294967295": 9484,
+        "21": 184
+      },
+      "sha256": "4631c995158ddabdb78ec6821e6cb814e547d5d492e9c5670537294132f706fa",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Sandstone",
+      "bundles": [
+        "assets/CustomDLC/Sandstone/sandstone_content_main.bundle",
+        "assets/CustomDLC/Sandstone/sandstone_content_schema.bundle",
+        "assets/CustomDLC/Sandstone/sandstone_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 793,
+        "BoxCollider": 785
+      },
+      "triangles": 59244,
+      "layers": {
+        "14": 49805,
+        "0": 9439
+      },
+      "surface_types": {
+        "8": 23881,
+        "4": 13175,
+        "1": 690,
+        "22": 1303,
+        "7": 6046,
+        "14": 479,
+        "25": 613,
+        "10": 1967,
+        "12": 664,
+        "11": 426,
+        "3": 281,
+        "4294967295": 9463,
+        "9": 256
+      },
+      "sha256": "da3f12c35cbf07f8cd739004429354d9605c436ed54aa780a16b655814249cfd",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Sandyards",
+      "bundles": [
+        "assets/CustomDLC/Sandyards/sandyards_content_main.bundle",
+        "assets/CustomDLC/Sandyards/sandyards_content_schema.bundle",
+        "assets/CustomDLC/Sandyards/sandyards_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 399,
+        "BoxCollider": 297
+      },
+      "triangles": 42137,
+      "layers": {
+        "14": 38573,
+        "0": 3564
+      },
+      "surface_types": {
+        "4": 6430,
+        "14": 142,
+        "7": 6066,
+        "8": 15263,
+        "12": 666,
+        "9": 578,
+        "26": 7588,
+        "22": 928,
+        "1": 462,
+        "11": 414,
+        "3": 36,
+        "4294967295": 3564
+      },
+      "sha256": "17f7a207b435fe001ec22e90c37e69931d4c086c3fe32badda578869d177c125",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Temple",
+      "bundles": [
+        "assets/CustomDLC/Temple/temple_content_main.bundle",
+        "assets/CustomDLC/Temple/temple_content_schema.bundle",
+        "assets/CustomDLC/Temple/temple_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 131,
+        "BoxCollider": 285
+      },
+      "triangles": 27110,
+      "layers": {
+        "14": 23688,
+        "4": 2,
+        "0": 3420
+      },
+      "surface_types": {
+        "4": 15159,
+        "8": 6068,
+        "7": 402,
+        "23": 2,
+        "20": 241,
+        "21": 285,
+        "22": 1139,
+        "1": 96,
+        "25": 298,
+        "4294967295": 3420
+      },
+      "sha256": "7058be4a90b2f989ce909fa0b22ed5c64b0581d6010dc692d9f735e9e20420ea",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "TrainingOutside",
+      "bundles": [
+        "assets/CustomDLC/TrainingOutside/trainingoutside_content_main.bundle",
+        "assets/CustomDLC/TrainingOutside/trainingoutside_content_schema.bundle",
+        "assets/CustomDLC/TrainingOutside/trainingoutside_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 293,
+        "BoxCollider": 201
+      },
+      "triangles": 41137,
+      "layers": {
+        "14": 38725,
+        "0": 2412
+      },
+      "surface_types": {
+        "12": 1656,
+        "14": 21586,
+        "7": 5484,
+        "4": 5863,
+        "8": 2797,
+        "1": 8,
+        "9": 1319,
+        "22": 12,
+        "4294967295": 2412
+      },
+      "sha256": "14b6950fc03a7fcf72aa6b1a2ada854aeb6a4db8819a2e8363ed94ebed56be7d",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Village",
+      "bundles": [
+        "assets/CustomDLC/Village/village_content_main.bundle",
+        "assets/CustomDLC/Village/village_content_schema.bundle",
+        "assets/CustomDLC/Village/village_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 275,
+        "BoxCollider": 328
+      },
+      "triangles": 35297,
+      "layers": {
+        "14": 31361,
+        "0": 3936
+      },
+      "surface_types": {
+        "7": 4070,
+        "1": 56,
+        "8": 3767,
+        "4": 17041,
+        "14": 58,
+        "21": 325,
+        "26": 3948,
+        "22": 1828,
+        "23": 10,
+        "25": 258,
+        "4294967295": 3936
+      },
+      "sha256": "a9c435b864bc72725a2518e8373d22243f7541cbce563fe85611669afb2fad4d",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    },
+    {
+      "map": "Yard",
+      "bundles": [
+        "assets/CustomDLC/Yard/yard_content_main.bundle",
+        "assets/CustomDLC/Yard/yard_content_schema.bundle",
+        "assets/CustomDLC/Yard/yard_scenes_0.bundle"
+      ],
+      "colliders": {
+        "MeshCollider": 218,
+        "BoxCollider": 124
+      },
+      "triangles": 22991,
+      "layers": {
+        "14": 21199,
+        "0": 1786,
+        "4": 6
+      },
+      "surface_types": {
+        "8": 7623,
+        "25": 12338,
+        "14": 448,
+        "3": 112,
+        "1": 164,
+        "22": 126,
+        "10": 388,
+        "4294967295": 1786,
+        "23": 6
+      },
+      "sha256": "f34a92d516bf9360bf32306750a4f88c68a2db6afd007531a7d59c307c30823d",
+      "errors": [],
+      "coordinates": "Unity world XYZ / Y up / meters / no Z flip"
+    }
+  ]
+}
