@@ -95,7 +95,7 @@ struct Vector3 {
     [[maybe_unused]] inline Vector3 normalizedEuler() { return NormalizeEuler(*this); }
     inline std::string str() { return std::to_string(x) + (", ") + std::to_string(y) + (", ") + std::to_string(z); }
     inline const Vector3& operator+=(float v) { x+=v; y+=v; z+=v; return *this; };
-    inline const Vector3& operator-=(float v) { x-=v; y-=v; y-=v; return *this; };
+    inline const Vector3& operator-=(float v) { x-=v; y-=v; z-=v; return *this; };
     inline const Vector3& operator*=(float v) { x*=v; y*=v; z*=v; return *this; };
     inline const Vector3& operator/=(float v) { x/=v; y/=v; z/=v; return *this; };
     inline const Vector3& operator+=(Vector3 v) { x+=v.x; y+=v.y; z+=v.z; return *this; };

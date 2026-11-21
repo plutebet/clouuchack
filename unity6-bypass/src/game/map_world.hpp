@@ -176,6 +176,7 @@ public:
         tris_.clear();
         order_.clear();
         nodes_.clear();
+        root_ = 0;
         box_ = Bounds{};
         name_.clear();
     }
@@ -188,7 +189,7 @@ public:
     // True when a layer-14 triangle lies strictly between the two points.
     // hit_distance (optional) receives the distance to the nearest such face.
     bool blocked(Vector3 from, Vector3 to, float* hit_distance = nullptr) const {
-        if (nodes_.empty()) return false;
+        if (nodes_.empty() || root_ >= nodes_.size()) return false;
         const float delta[3] = {to.x - from.x, to.y - from.y, to.z - from.z};
         const float length = std::sqrt(delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]);
         if (!(length > 0.02f) || !std::isfinite(length)) return false;
@@ -198,7 +199,7 @@ public:
         float best = length;
         uint32_t stack[64];
         int top = 0;
-        stack[top++] = 0;
+        stack[top++] = root_;
         while (top > 0) {
             const Node& node = nodes_[size_t(stack[--top])];
             if (!slab(origin, dir, node, best)) continue;
@@ -227,8 +228,12 @@ private:
         for (size_t i = 0; i < order_.size(); ++i) order_[i] = uint32_t(i);
         nodes_.clear();
         nodes_.reserve(tris_.size() / 4 + 16);
-        nodes_.push_back(Node{});
-        build_node(0, uint32_t(tris_.size()));
+        // build_node() appends the node it fills, so the first call creates
+        // node 0 and returns 0. The traversal must start there: starting at a
+        // hardcoded 0 while the root lives at index 1 (the old layout) made
+        // every ray test return "clear", which is why the wall check never
+        // once fired and the ground probe never identified a map.
+        root_ = build_node(0, uint32_t(tris_.size()));
     }
 
     uint32_t build_node(uint32_t first, uint32_t count) {
@@ -326,6 +331,7 @@ private:
     std::vector<Tri> tris_;
     std::vector<uint32_t> order_;
     std::vector<Node> nodes_;
+    uint32_t root_{0};
     Bounds box_{};
     std::string name_;
 };
@@ -649,13 +655,16 @@ private:
                 keep = world_ != nullptr && inside(published_, local, 8.f);
                 if (keep) last_scan_ms_ = diag::now_ms();
             }
+            char residual_text[24];
+            if (best) std::snprintf(residual_text, sizeof(residual_text), "%.2f", best_residual);
+            else std::snprintf(residual_text, sizeof(residual_text), "n/a");
             char line[256];
             std::snprintf(line, sizeof(line),
-                          "probe: %d candidates, %d probed%s, best %s (%.0f%% of points, residual %.2f) — not confirmed yet",
+                          "probe: %d candidates, %d probed%s, best %s (%.0f%% of points, residual %s) — not confirmed yet",
                           candidates, attempts, ignored ? " (some maps ignored)" : "",
                           best ? best->name().c_str() : "none",
                           best ? 100.f * float(best_stats.matched) / float(best_stats.examined ? best_stats.examined : 1) : 0.f,
-                          best_residual);
+                          residual_text);
             if (keep) {
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
@@ -663,7 +672,8 @@ private:
                 }
                 diag::log("MAP", "%s, keeping %s", line, published_name_.c_str());
             } else {
-                diag::log("MAP", "%s", line);
+                // publish() logs the same line, so this path must not log it
+                // twice: the session log had every "probe:" line duplicated.
                 publish(nullptr, line);
             }
             return;

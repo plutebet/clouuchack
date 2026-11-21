@@ -280,6 +280,10 @@ void visuals::draw() {
         Vector3 position{};
         Vector3 head{};
         bool has_head{false};
+        // Interpolation offset applied to position/head (ESP smoothing). The
+        // skeleton is drawn from the raw bone cache, so it has to move by the
+        // same offset or the bones and the box drift apart.
+        Vector3 smooth_delta{};
         int hp{0};
         int max_hp{100};
         int weapon{-1};
@@ -405,7 +409,11 @@ void visuals::draw() {
             }
         }
         motion_update(m, e.position, e.head, sample_us);
-        if (cfg::esp::smooth) motion_render(m, sample_us, e.position, e.head);
+        if (cfg::esp::smooth) {
+            const Vector3 raw_feet = e.position;
+            motion_render(m, sample_us, e.position, e.head);
+            e.smooth_delta = e.position - raw_feet;
+        }
     }
 
     // Camera selection. The controller camera whose bor is
@@ -471,7 +479,11 @@ void visuals::draw() {
                 diag::log("CAMERA", "candidate=0x%llx kind=%s score=%d front=%d onscreen=%d localDistance=%.2f proj=(%.3f %.3f)",
                           (unsigned long long)Camera.address, camera_kind_name(Camera.kind), score, front, onscreen,
                           camera_distance, Camera.projection.m11, Camera.projection.m22);
-            if (has_targets && front == 0) continue;
+            // A source that sees nobody is not disqualified: with every enemy
+            // behind the player the old `continue` left selected_camera = 0 and
+            // the whole overlay went blank ("camera: none") until somebody
+            // walked into view again. It just scores lower.
+            if (has_targets && front == 0) score -= 60;
             if (score > selected_score || (score == selected_score && Camera.address == g_camera)) {
                 selected_score = score;
                 selected_front = front;
@@ -506,23 +518,22 @@ void visuals::draw() {
     const matrix TriggerView = ViewMatrix;
 
 
-    // Matrix fallback: a stale camera read at a round transition can make every
-    // projection fail for a frame. The old code then drew with the *previous*
-    // matrices, which puts every box where the player no longer is — the
-    // session log shows 50 such frames. Not drawing for one frame is
-    // invisible; drawing boxes in the wrong place is not. So the matrices are
-    // left alone and the boxes simply fail to project.
-    if (!frame_enemies.empty()) {
-        bool any_projects = false;
-        for (const auto& Enemy : frame_enemies) {
-            ImVec2 tmp;
-            if (world_to_screen(Enemy.head, ViewMatrix, ProjectionMatrix, tmp)) { any_projects = true; break; }
-        }
-        if (!any_projects) {
-            static long long fb_log = 0;
-            if (diag::every(fb_log, 1000))
-                diag::log("CAMERA", "positioned=%d but none projected, boxes skipped this frame",
-                          positioned);
+    // Matrix sanity: the point straight in front of the camera must project
+    // into the middle of the screen. "positioned>0 but none projected" is the
+    // normal state when the enemies are behind the player, so it cannot be
+    // used to judge the matrices — this check can.
+    {
+        const float* vm = reinterpret_cast<const float*>(&ViewMatrix);
+        const Vector3 eye = hitbox::camera_eye(vm);
+        const Vector3 forward = hitbox::camera_forward(vm);
+        const Vector3 probe{eye.x + forward.x * 10.f, eye.y + forward.y * 10.f, eye.z + forward.z * 10.f};
+        ImVec2 centre;
+        const bool on_axis = world_to_screen(probe, ViewMatrix, ProjectionMatrix, centre);
+        if (!on_axis || std::fabs(centre.x - g_sw * 0.5f) > 24.f || std::fabs(centre.y - g_sh * 0.5f) > 24.f) {
+            static long long bad_log = 0;
+            if (diag::every(bad_log, 1000))
+                diag::log("CAMERA", "view/projection disagree with the crosshair (eye %.1f %.1f %.1f on_axis=%d at %.0f,%.0f), boxes skipped this frame",
+                          eye.x, eye.y, eye.z, int(on_axis), centre.x, centre.y);
         }
     }
 
@@ -569,7 +580,15 @@ void visuals::draw() {
             const ImU32 hb_col = IM_COL32(int(bc.x*255.f), int(bc.y*255.f), int(bc.z*255.f), int(ba*255.f));
 
             hitbox::HitVolume volumes[player::kBoneCount];
-            int nv = hitbox::make_hit_volumes(Enemy.bones, volumes, 1.0f);
+            // Bones come from the 10 Hz cache and are not interpolated: shift
+            // them by the same offset the box was shifted by, or the drawn
+            // hitboxes sit where the player was one game frame ago.
+            player::BoneData draw_bones = Enemy.bones;
+            if (Enemy.smooth_delta.x != 0.f || Enemy.smooth_delta.y != 0.f || Enemy.smooth_delta.z != 0.f) {
+                for (int bi = 0; bi < player::kBoneCount; ++bi)
+                    if (draw_bones.mask & (1u << bi)) draw_bones.positions[bi] = draw_bones.positions[bi] + Enemy.smooth_delta;
+            }
+            int nv = hitbox::make_hit_volumes(draw_bones, volumes, 1.0f);
             for (int vi = 0; vi < nv; ++vi) {
                 const hitbox::HitVolume& vol = volumes[vi];
                 if (vol.capsule) {
