@@ -5,10 +5,13 @@ namespace cfg {
 
 namespace esp {
     inline bool box = true;
-    inline bool name = false;
+    inline bool name = true;
     inline bool health = true;
     inline bool weapon = true;
-    inline float box_rounding = 0.f;
+    inline bool distance = true;
+    inline int box_style = 1;        // 0=full rect, 1=cornered, 2=rounded
+    inline float box_rounding = 4.f;
+    inline bool box_fill = true;
     inline bool smooth = false;
     inline bool teammates = false;
     inline bool visible_check = true;

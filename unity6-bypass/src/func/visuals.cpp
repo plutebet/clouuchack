@@ -108,7 +108,7 @@ namespace {
 void visuals::draw() {
     if (!(g_sw >= 2.f) || !(g_sh >= 2.f)) return;
     bool any = cfg::esp::box || cfg::esp::name || cfg::esp::health || cfg::esp::weapon ||
-               cfg::trigger::enabled || cfg::aim::enabled;
+               cfg::esp::distance || cfg::trigger::enabled || cfg::aim::enabled;
     if (!any) { esp_wait("all ESP options disabled"); return; }
 
     crash::stage("render-p");
@@ -572,7 +572,12 @@ void visuals::draw() {
                 ? found->second.name.c_str() : "Enemy";
             dnick(label, it.min, it.cx, text_sz, fade);
         }
-        if (cfg::esp::weapon) dweapon(Enemy.weapon, it.cx, it.max.y + 3.f, it.max.x - it.min.x, text_sz, fade);
+        float bottom_y = it.max.y + 3.f;
+        if (cfg::esp::weapon) {
+            dweapon(Enemy.weapon, it.cx, bottom_y, it.max.x - it.min.x, text_sz, fade);
+            bottom_y += text_sz * 1.5f;
+        }
+        if (cfg::esp::distance) ddist(Enemy.distance, it.cx, bottom_y, text_sz, fade);
         if (cfg::esp::skeleton && Enemy.bones.mask) {
             ImDrawList* dl = ImGui::GetBackgroundDrawList();
             const ImVec4& bc = cfg::esp::box_col;
@@ -817,8 +822,48 @@ void visuals::dbox(const ImVec2& t, const ImVec2& b, float a) {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const float x1 = t.x, y1 = t.y, x2 = b.x, y2 = b.y;
     const float th = std::max(1.5f, roundf(2.f * g_sh / 1224.f));
-    const ImU32 thin = rgba(cfg::esp::box_col, 0.82f * a);
-    dl->AddRect(ImVec2(x1, y1), ImVec2(x2, y2), thin, th * 1.5f, 0, th);
+    const ImU32 col = rgba(cfg::esp::box_col, 0.92f * a);
+    const ImU32 outline = black(0.65f * a);
+
+    if (cfg::esp::box_fill) {
+        dl->AddRectFilled(ImVec2(x1, y1), ImVec2(x2, y2), IM_COL32(0, 0, 0, int(28.f * a)),
+                          cfg::esp::box_style == 2 ? cfg::esp::box_rounding : 0.f);
+    }
+
+    if (cfg::esp::box_style == 1) {
+        const float w = x2 - x1, h = y2 - y1;
+        const float corner = std::max(4.f, std::min(w, h) * 0.22f);
+        // dark outline behind each corner for contrast
+        for (float d : {-1.f, 1.f}) {
+            const ImVec2 off(d, d);
+            // top-left
+            dl->AddLine(ImVec2(x1+off.x, y1+off.y), ImVec2(x1+corner+off.x, y1+off.y), outline, th);
+            dl->AddLine(ImVec2(x1+off.x, y1+off.y), ImVec2(x1+off.x, y1+corner+off.y), outline, th);
+            // top-right
+            dl->AddLine(ImVec2(x2+off.x, y1+off.y), ImVec2(x2-corner+off.x, y1+off.y), outline, th);
+            dl->AddLine(ImVec2(x2+off.x, y1+off.y), ImVec2(x2+off.x, y1+corner+off.y), outline, th);
+            // bottom-left
+            dl->AddLine(ImVec2(x1+off.x, y2+off.y), ImVec2(x1+corner+off.x, y2+off.y), outline, th);
+            dl->AddLine(ImVec2(x1+off.x, y2+off.y), ImVec2(x1+off.x, y2-corner+off.y), outline, th);
+            // bottom-right
+            dl->AddLine(ImVec2(x2+off.x, y2+off.y), ImVec2(x2-corner+off.x, y2+off.y), outline, th);
+            dl->AddLine(ImVec2(x2+off.x, y2+off.y), ImVec2(x2+off.x, y2-corner+off.y), outline, th);
+        }
+        // coloured corners
+        dl->AddLine(ImVec2(x1, y1), ImVec2(x1+corner, y1), col, th);
+        dl->AddLine(ImVec2(x1, y1), ImVec2(x1, y1+corner), col, th);
+        dl->AddLine(ImVec2(x2, y1), ImVec2(x2-corner, y1), col, th);
+        dl->AddLine(ImVec2(x2, y1), ImVec2(x2, y1+corner), col, th);
+        dl->AddLine(ImVec2(x1, y2), ImVec2(x1+corner, y2), col, th);
+        dl->AddLine(ImVec2(x1, y2), ImVec2(x1, y2-corner), col, th);
+        dl->AddLine(ImVec2(x2, y2), ImVec2(x2-corner, y2), col, th);
+        dl->AddLine(ImVec2(x2, y2), ImVec2(x2, y2-corner), col, th);
+    } else {
+        const float rounding = cfg::esp::box_style == 2 ? cfg::esp::box_rounding : 0.f;
+        dl->AddRect(ImVec2(x1-1.f, y1-1.f), ImVec2(x2+1.f, y2+1.f), outline, rounding, 0, th);
+        dl->AddRect(ImVec2(x1+1.f, y1+1.f), ImVec2(x2-1.f, y2-1.f), outline, rounding, 0, th);
+        dl->AddRect(ImVec2(x1, y1), ImVec2(x2, y2), col, rounding, 0, th);
+    }
 }
 
 // Health bar to the left of the box, coloured by the health left; the
@@ -846,13 +891,17 @@ void visuals::dhp(int hp, int max_hp, const ImVec2& t, const ImVec2& b, float a)
     }
 }
 
-// Name centred above the box.
+// Name centred above the box with a dark background panel.
 void visuals::dnick(const char* name, const ImVec2& box_min, float cx, float sz, float a) {
     if (!espFont || a < 0.01f || !name) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const ImVec2 ts = espFont->CalcTextSizeA(sz, FLT_MAX, 0.f, name);
-    const ImVec2 tp(roundf(cx - ts.x * 0.5f), roundf(box_min.y - ts.y - 3.f));
-    draw_text_outlined(dl, espFont, sz, tp, rgba(cfg::esp::name_col, a), name);
+    const float px = 4.f, py = 2.f;
+    const ImVec2 tp(roundf(cx - ts.x * 0.5f), roundf(box_min.y - ts.y - py * 2.f - 3.f));
+    dl->AddRectFilled(ImVec2(tp.x - px, tp.y - py),
+                      ImVec2(tp.x + ts.x + px, tp.y + ts.y + py),
+                      IM_COL32(0, 0, 0, int(110.f * a)), 3.f);
+    dl->AddText(espFont, sz, tp, rgba(cfg::esp::name_col, a), name);
 }
 
 // Weapon icon under the box: the atlas icon of this weapon id (weapon_icons.h), tinted by
@@ -886,6 +935,18 @@ void visuals::dweapon(int weapon_id, float cx, float y, float box_w, float sz, f
     if (!espFont) return;
     const ImVec2 ts = espFont->CalcTextSizeA(sz, FLT_MAX, 0.f, label);
     draw_text_outlined(dl, espFont, sz, ImVec2(roundf(cx - ts.x * 0.5f), roundf(y)), col, label);
+}
+
+// Distance in metres below the weapon line.
+void visuals::ddist(float dist, float cx, float y, float sz, float a) {
+    if (!espFont || a < 0.01f) return;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%.0fm", dist);
+    const float fs = sz * 0.85f;
+    const ImVec2 ts = espFont->CalcTextSizeA(fs, FLT_MAX, 0.f, buf);
+    const ImVec2 tp(roundf(cx - ts.x * 0.5f), roundf(y + 2.f));
+    draw_text_outlined(dl, espFont, fs, tp, IM_COL32(200, 200, 200, int(255 * a * 0.8f)), buf);
 }
 
 // 1 px dark outline on all sides: readable on bright and dark backgrounds.

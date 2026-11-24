@@ -296,6 +296,8 @@ namespace ui::menu {
                 {"Name", &cfg::esp::name},
                 {"Health", &cfg::esp::health},
                 {"Weapon", &cfg::esp::weapon},
+                {"Distance", &cfg::esp::distance},
+                {"Box Fill", &cfg::esp::box_fill},
                 {"Smooth", &cfg::esp::smooth},
                 {"Skeleton", &cfg::esp::skeleton},
             };
