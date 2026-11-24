@@ -570,7 +570,7 @@ void visuals::draw() {
             const auto found = g_name_cache.find(Enemy.object);
             const char* label = found != g_name_cache.end() && !found->second.name.empty()
                 ? found->second.name.c_str() : "Enemy";
-            dnick(label, it.min, it.cx, text_sz, fade);
+            dnick(label, Enemy.hp, Enemy.max_hp, it.min, it.cx, text_sz, fade);
         }
         float bottom_y = it.max.y + 3.f;
         if (cfg::esp::weapon) {
@@ -891,17 +891,30 @@ void visuals::dhp(int hp, int max_hp, const ImVec2& t, const ImVec2& b, float a)
     }
 }
 
-// Name centred above the box with a dark background panel.
-void visuals::dnick(const char* name, const ImVec2& box_min, float cx, float sz, float a) {
+// Info bar: dark rounded pill above the box with white nickname; HP line
+// sits inside the pill bottom — length and colour both follow health.
+void visuals::dnick(const char* name, int hp, int max_hp, const ImVec2& box_min, float cx, float sz, float a) {
     if (!espFont || a < 0.01f || !name) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const ImVec2 ts = espFont->CalcTextSizeA(sz, FLT_MAX, 0.f, name);
-    const float px = 4.f, py = 2.f;
-    const ImVec2 tp(roundf(cx - ts.x * 0.5f), roundf(box_min.y - ts.y - py * 2.f - 3.f));
-    dl->AddRectFilled(ImVec2(tp.x - px, tp.y - py),
-                      ImVec2(tp.x + ts.x + px, tp.y + ts.y + py),
-                      IM_COL32(0, 0, 0, int(110.f * a)), 3.f);
-    dl->AddText(espFont, sz, tp, rgba(cfg::esp::name_col, a), name);
+    const float ph = std::max(sz + 9.f, 15.f);
+    const float pad_x = ph * 0.55f;
+    const float pw = ts.x + pad_x * 2.f;
+    const float x0 = roundf(cx - pw * 0.5f);
+    const float y1 = roundf(box_min.y - 3.f);
+    const float y0 = y1 - ph;
+
+    if (max_hp <= 0) max_hp = 100;
+    const float pct = std::clamp(float(hp) / float(max_hp), 0.f, 1.f);
+    const float r = ph * 0.5f;
+
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + pw, y1), black(0.78f * a), r);
+    const float line_th = std::max(2.f, roundf(2.f * g_sh / 1224.f));
+    const float line_x0 = x0 + 3.f, line_w = (pw - 6.f) * pct;
+    if (line_w >= 1.f)
+        dl->AddRectFilled(ImVec2(line_x0, y1 - line_th), ImVec2(line_x0 + line_w, y1), health_color(pct, a));
+    const ImVec2 tp(roundf(cx - ts.x * 0.5f), roundf(y0 + (ph - ts.y) * 0.5f));
+    dl->AddText(espFont, sz, tp, IM_COL32(255, 255, 255, int(255 * a)), name);
 }
 
 // Weapon icon under the box: the atlas icon of this weapon id (weapon_icons.h), tinted by
