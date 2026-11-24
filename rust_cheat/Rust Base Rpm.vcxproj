@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\Il2Cpp\Decryptions\decryption.h" />
+    <ClInclude Include="src\Il2Cpp\Decryptions\decryptor.hpp" />
+    <ClInclude Include="src\Il2Cpp\GcHandle\il2cpp.h" />
+    <ClInclude Include="src\Menu\Config.h" />
+    <ClInclude Include="src\libs\overlay\Overlay.h" />
+    <ClInclude Include="src\libs\render\Renderer.h" />
+    <ClInclude Include="src\libs\web\MenuWeb.h" />
+    <ClInclude Include="src\Hud\Hud.h" />
+    <ClInclude Include="src\Pch\Pch.h" />
+    <ClInclude Include="src\Driver\Rpm.h" />
+    <ClInclude Include="src\Features\Visuals\Esp\Esp.h" />
+    <ClInclude Include="src\Features\Visuals\Esp\ImageEsp.h" />
+    <ClInclude Include="src\Features\Visuals\Chams\Chams.h" />
+    <ClInclude Include="src\Features\Aim\Aim.h" />
+    <ClInclude Include="src\Features\Misc\Misc.h" />
+    <ClInclude Include="src\GetEntities\Entities.h" />
+    <ClInclude Include="src\GetEntities\EntityCaching.h" />
+    <ClInclude Include="src\GetEntities\Prefabs\Prefabs.h" />
+    <ClInclude Include="src\Threading\Threading.h" />
+    <ClInclude Include="src\Offsets\Offsets.h" />
+    <ClInclude Include="src\Offsets\resources.hpp" />
+    <ClInclude Include="src\World2Screen\Math\Math.h" />
+    <ClInclude Include="src\World2Screen\World2Screen.h" />
+    <ClInclude Include="src\libs\json\json.hpp" />
+    <ClInclude Include="src\libs\webview2\WebView2.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\Pch\Pch.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="src\Il2Cpp\Decryptions\decryption.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles>
+      </ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="src\Il2Cpp\GcHandle\il2cpp.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles>
+      </ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="src\libs\overlay\Overlay.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles>
+      </ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="src\libs\render\Renderer.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles>
+      </ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="src\libs\web\MenuWeb.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles>
+      </ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="src\Hud\Hud.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles>
+      </ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="src\Driver\Rpm.cpp" />
+    <ClCompile Include="src\Features\Visuals\Esp\Esp.cpp" />
+    <ClCompile Include="src\Features\Visuals\Esp\ImageEsp.cpp" />
+    <ClCompile Include="src\Features\Visuals\Chams\Chams.cpp" />
+    <ClCompile Include="src\Features\Aim\Aim.cpp" />
+    <ClCompile Include="src\Features\Misc\Misc.cpp" />
+    <ClCompile Include="src\GetEntities\Entities.cpp" />
+    <ClCompile Include="src\GetEntities\EntityCaching.cpp" />
+    <ClCompile Include="src\GetEntities\Skeleton.cpp" />
+    <ClCompile Include="src\GetEntities\Prefabs\Prefabs.cpp" />
+    <ClCompile Include="src\Main\Main.cpp" />
+    <ClCompile Include="src\Menu\Config.cpp" />
+    <ClCompile Include="src\World2Screen\World2Screen.cpp" />
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{a11f0518-5f9d-4899-af2c-22a92a3d9774}</ProjectGuid>
+    <RootNamespace>RustBaseRpm</RootNamespace>
+    <ProjectName>VexusClient</ProjectName>
+    <TargetName>VexusClient</TargetName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NOMINMAX;_WIN32_WINNT=0x0A00;WINVER=0x0A00;_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>Pch.h</PrecompiledHeaderFile>
+      <ForcedIncludeFiles>Pch.h</ForcedIncludeFiles>
+      <AdditionalIncludeDirectories>$(ProjectDir)src\Pch;$(ProjectDir)src;$(ProjectDir)src\Il2Cpp;$(ProjectDir)src\libs;$(ProjectDir)src\libs\overlay;$(ProjectDir)src\libs\render;$(ProjectDir)src\libs\web;$(ProjectDir)src\libs\webview2;$(ProjectDir)src\Menu;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(ProjectDir)src\libs\webview2\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>d3d11.lib;dwmapi.lib;dcomp.lib;d2d1.lib;dwrite.lib;ole32.lib;shlwapi.lib;version.lib;WebView2Loader.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Manifest>
+      <EnableSegmentHeap>true</EnableSegmentHeap>
+    </Manifest>
+    <PostBuildEvent>
+      <Command>if exist "$(ProjectDir)..\ui\out\index.html" xcopy /E /I /Y /Q "$(ProjectDir)..\ui\out" "$(OutDir)ui" &gt;nul
+if not exist "$(ProjectDir)..\ui\out\index.html" echo [Vexus] ui\out missing - run: cd ui ^&amp;^&amp; npm install ^&amp;^&amp; npm run build
+if exist "$(ProjectDir)..\rust" xcopy /E /I /Y /Q "$(ProjectDir)..\rust" "$(OutDir)rust" &gt;nul
+copy /Y "$(ProjectDir)src\libs\webview2\x64\WebView2Loader.dll" "$(OutDir)" &gt;nul</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NOMINMAX;_WIN32_WINNT=0x0A00;WINVER=0x0A00;NDEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>Pch.h</PrecompiledHeaderFile>
+      <ForcedIncludeFiles>Pch.h</ForcedIncludeFiles>
+      <AdditionalIncludeDirectories>$(ProjectDir)src\Pch;$(ProjectDir)src;$(ProjectDir)src\Il2Cpp;$(ProjectDir)src\libs;$(ProjectDir)src\libs\overlay;$(ProjectDir)src\libs\render;$(ProjectDir)src\libs\web;$(ProjectDir)src\libs\webview2;$(ProjectDir)src\Menu;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(ProjectDir)src\libs\webview2\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>d3d11.lib;dwmapi.lib;dcomp.lib;d2d1.lib;dwrite.lib;ole32.lib;shlwapi.lib;version.lib;WebView2Loader.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
+    </Link>
+    <Manifest>
+      <EnableSegmentHeap>true</EnableSegmentHeap>
+    </Manifest>
+    <PostBuildEvent>
+      <Command>if exist "$(ProjectDir)..\ui\out\index.html" xcopy /E /I /Y /Q "$(ProjectDir)..\ui\out" "$(OutDir)ui" &gt;nul
+if not exist "$(ProjectDir)..\ui\out\index.html" echo [Vexus] ui\out missing - run: cd ui ^&amp;^&amp; npm install ^&amp;^&amp; npm run build
+if exist "$(ProjectDir)..\rust" xcopy /E /I /Y /Q "$(ProjectDir)..\rust" "$(OutDir)rust" &gt;nul
+copy /Y "$(ProjectDir)src\libs\webview2\x64\WebView2Loader.dll" "$(OutDir)" &gt;nul</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

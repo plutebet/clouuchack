@@ -1,0 +1,50 @@
+name: build-arm64
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  ndk-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: NDK
+        run: |
+          NDK="${ANDROID_NDK_HOME:-$ANDROID_NDK_LATEST_HOME}"
+          test -x "$NDK/ndk-build" || { echo "no NDK on runner"; ls "$ANDROID_HOME/ndk" || true; exit 1; }
+          echo "NDK=$NDK" >> "$GITHUB_ENV"
+          grep Pkg.Revision "$NDK/source.properties"
+
+      - name: Build
+        run: |
+          cd jni
+          BYCMD_BUILD_ID="${GITHUB_SHA::7}" "$NDK/ndk-build" -j"$(nproc)" BYCMD_BUILD_ID="${GITHUB_SHA::7}"
+
+      - name: Inspect
+        run: |
+          RE="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          BIN=libs/arm64-v8a/eeeww
+          ls -l "$BIN" obj/local/arm64-v8a/eeeww
+          "$RE" -h "$BIN" | grep -E "Class|Machine|Type"
+          echo "NEEDED:"; "$RE" -d "$BIN" | grep NEEDED
+          echo "LOAD alignment:"; "$RE" -lW "$BIN" | grep LOAD
+          # 16 KB page kernels refuse 4 KB aligned segments
+          if "$RE" -lW "$BIN" | awk '/LOAD/{print $NF}' | grep -qv '0x4000'; then echo "LOAD not 16 KB aligned"; exit 1; fi
+          sha256sum "$BIN" | tee eeeww.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eeeww-arm64-${{ github.sha }}
+          path: |
+            libs/arm64-v8a/eeeww
+            eeeww.sha256
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eeeww-arm64-unstripped-${{ github.sha }}
+          path: obj/local/arm64-v8a/eeeww
+          if-no-files-found: error
