@@ -139,7 +139,7 @@ namespace v100 {
     // inside bak. These three values replace the old scan+consensus system.
     inline constexpr uint64_t profile_typeinfo = 0xCD2E948;  // dpk_TypeInfo (player profile component)
     inline constexpr uint64_t profile_block = 0x18;          // dpk.ipbh : bak (profile data block ref)
-    inline constexpr uint64_t profile_name = 0x18;           // bak.<nick> : System.String (nickname field)
+    inline constexpr uint64_t profile_nick = 0x18;           // bak.<nick> : System.String (nickname field)
 
     // ---- weapon (dump.cs + script.json 1.1.0, libunity build-id 69815f2befe135c2) ----
     inline constexpr uint64_t weapon_part_typeinfo = 0xCD34CE0;   // uyg_TypeInfo (uyg : cew, WeaponPart)
@@ -432,7 +432,7 @@ namespace game {
             diag::log(id_match ? "INFO" : "ERROR",
                       "libunity build-id=%s expected=%s match=%d camera-klass=%s profile=%s",
                       id, v100::libunity_build_id, id_match ? 1 : 0,
-                      name_readable ? name.c_str() : "?", v100::profile_name);
+                      name_readable ? name.c_str() : "?", v100::profile_nick);
         } else if (name_readable) {
             proc::build_checked = true;
             proc::build_ok = camera_ok;
@@ -1193,7 +1193,7 @@ inline std::string player_name(uint64_t player, uint32_t player_id) {
     if (!comp) return {};
     const uint64_t block = rpm<uint64_t>(comp + v100::profile_block);
     if (!plausible(block)) return {};
-    const uint64_t str_ptr = rpm<uint64_t>(block + v100::profile_name);
+    const uint64_t str_ptr = rpm<uint64_t>(block + v100::profile_nick);
     if (!obj_ptr(str_ptr)) {
         auto it = g_name_last.find(player_id);
         return it != g_name_last.end() ? it->second : std::string{};
