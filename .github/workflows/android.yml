@@ -1,26 +1,29 @@
-name: Android CI
+name: Build ARM64
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    branches: [ "claude/*" , "main" ]
+  workflow_dispatch:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
-    - name: set up JDK 11
-      uses: actions/setup-java@v4
-      with:
-        java-version: '11'
-        distribution: 'temurin'
-        cache: gradle
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
-    - name: Build with Gradle
-      run: ./gradlew build
+    - name: Set up NDK
+      uses: nttld/setup-ndk@v1
+      id: ndk
+      with:
+        ndk-version: r27c
+
+    - name: Build with ndk-build
+      run: |
+        export ANDROID_NDK_HOME=${{ steps.ndk.outputs.ndk-path }}
+        $ANDROID_NDK_HOME/ndk-build -C jni NDK_PROJECT_PATH=$(pwd) APP_BUILD_SCRIPT=$(pwd)/jni/Android.mk NDK_APPLICATION_MK=$(pwd)/jni/Application.mk BYCMD_BUILD_ID=ci-$(date +%Y%m%d-%H%M) -j$(nproc)
+
+    - name: Upload binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: eeeww-arm64
+        path: libs/arm64-v8a/eeeww
