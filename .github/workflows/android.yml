@@ -27,3 +27,9 @@ jobs:
       with:
         name: eeeww-arm64
         path: libs/arm64-v8a/eeeww
+
+    - name: Upload debug binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: eeeww-arm64-debug
+        path: obj/local/arm64-v8a/eeeww
